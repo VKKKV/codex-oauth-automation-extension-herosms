@@ -154,6 +154,7 @@
           <select id="select-mail-provider" class="data-select">
             <option value="custom">自定义邮箱</option>
             <option value="hotmail-api">Hotmail（本地助手）</option>
+            <option value="luckmail-api">LuckMail（API 购邮）</option>
             <option value="163">163 邮箱 (mail.163.com)</option>
             <option value="163-vip">163 VIP 邮箱 (vip.163.com)</option>
             <option value="qq">QQ 邮箱 (wx.mail.qq.com)</option>
@@ -316,6 +317,77 @@
         <div id="hotmail-accounts-list" class="hotmail-accounts-list"></div>
       </div>
     </div>
+    <div id="luckmail-section" class="data-card luckmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">LuckMail 配置</span>
+        </div>
+      </div>
+      <div class="data-row">
+        <span class="data-label">API Key</span>
+        <input type="password" id="input-luckmail-api-key" class="data-input mono" placeholder="请输入 LuckMail API Key" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">Base URL</span>
+        <input type="text" id="input-luckmail-base-url" class="data-input mono" placeholder="https://mails.luckyous.com" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">邮箱类型</span>
+        <select id="select-luckmail-email-type" class="data-select">
+          <option value="self_built">自建邮箱</option>
+          <option value="ms_imap">微软 IMAP</option>
+          <option value="ms_graph">微软 Graph</option>
+          <option value="google_variant">谷歌变种</option>
+        </select>
+      </div>
+      <div class="data-row">
+        <span class="data-label">域名</span>
+        <input type="text" id="input-luckmail-domain" class="data-input mono" placeholder="可选，留空则由 LuckMail 默认处理" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">项目</span>
+        <span class="data-value mono">openai</span>
+      </div>
+      <div class="luckmail-manager-card">
+        <div class="section-mini-header">
+          <div class="section-mini-copy">
+            <span class="section-label">LuckMail 邮箱列表</span>
+            <span class="data-value">仅显示项目为 <span class="mono">openai</span> 的邮箱</span>
+          </div>
+          <div class="section-mini-actions">
+            <button id="btn-luckmail-refresh" class="btn btn-ghost btn-xs" type="button">刷新</button>
+            <button id="btn-luckmail-disable-used" class="btn btn-ghost btn-xs" type="button">禁用已用</button>
+          </div>
+        </div>
+        <div id="luckmail-summary" class="luckmail-summary">加载已购邮箱后可在这里管理 openai 项目的 LuckMail 邮箱。</div>
+        <div class="luckmail-toolbar">
+          <input id="input-luckmail-search" class="data-input luckmail-search" type="text" placeholder="搜索邮箱 / 标签 / 项目" />
+          <select id="select-luckmail-filter" class="data-select luckmail-filter">
+            <option value="all">全部</option>
+            <option value="reusable">可复用</option>
+            <option value="used">已用</option>
+            <option value="unused">未用</option>
+            <option value="preserved">保留</option>
+            <option value="disabled">已禁用</option>
+          </select>
+        </div>
+        <div class="luckmail-bulkbar">
+          <label class="option-toggle luckmail-select-all" for="checkbox-luckmail-select-all">
+            <input type="checkbox" id="checkbox-luckmail-select-all" />
+            <span id="luckmail-selection-summary">已选 0 个</span>
+          </label>
+          <div class="luckmail-bulk-actions">
+            <button id="btn-luckmail-bulk-used" class="btn btn-outline btn-xs" type="button">标记已用</button>
+            <button id="btn-luckmail-bulk-unused" class="btn btn-outline btn-xs" type="button">标记未用</button>
+            <button id="btn-luckmail-bulk-preserve" class="btn btn-outline btn-xs" type="button">保留</button>
+            <button id="btn-luckmail-bulk-unpreserve" class="btn btn-outline btn-xs" type="button">取消保留</button>
+            <button id="btn-luckmail-bulk-disable" class="btn btn-outline btn-xs" type="button">禁用</button>
+            <button id="btn-luckmail-bulk-enable" class="btn btn-outline btn-xs" type="button">启用</button>
+          </div>
+        </div>
+        <div id="luckmail-list" class="luckmail-list"></div>
+      </div>
+    </div>
     <div id="status-bar" class="status-bar">
       <div class="status-dot"></div>
       <span id="display-status">就绪</span>
@@ -432,6 +504,7 @@
   <div id="toast-container"></div>
   <input id="input-import-settings-file" type="file" accept=".json,application/json" hidden />
   <script src="../hotmail-utils.js"></script>
+  <script src="../luckmail-utils.js"></script>
   <script src="update-service.js"></script>
   <script src="sidepanel.js"></script>
 </body>

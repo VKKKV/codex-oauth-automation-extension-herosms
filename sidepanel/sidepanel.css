@@ -698,6 +698,164 @@ header {
   margin-top: 10px;
 }
 
+.luckmail-card {
+  margin-top: 10px;
+}
+
+.luckmail-manager-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-base) 84%, transparent);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.luckmail-summary {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.luckmail-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.luckmail-search {
+  flex: 1;
+}
+
+.luckmail-filter {
+  flex: 0 0 130px;
+}
+
+.luckmail-bulkbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.luckmail-select-all {
+  flex: 0 0 auto;
+}
+
+.luckmail-bulk-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.luckmail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.luckmail-item {
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.luckmail-item.is-current {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px var(--blue-glow);
+}
+
+.luckmail-item-check {
+  margin-top: 4px;
+}
+
+.luckmail-item-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.luckmail-item-email-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.luckmail-item-email {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.luckmail-item-meta,
+.luckmail-item-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.luckmail-item-details {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.luckmail-item-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.luckmail-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+
+.luckmail-tag.used {
+  background: var(--orange-soft);
+  color: var(--orange);
+}
+
+.luckmail-tag.active {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.luckmail-tag.current {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.luckmail-tag.disabled {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.luckmail-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  text-align: center;
+}
+
 .hotmail-actions-row .data-label {
   visibility: hidden;
 }

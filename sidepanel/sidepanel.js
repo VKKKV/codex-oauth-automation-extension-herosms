@@ -69,6 +69,7 @@ const btnMailLogin = document.getElementById('btn-mail-login');
 const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
 const hotmailSection = document.getElementById('hotmail-section');
+const luckmailSection = document.getElementById('luckmail-section');
 const rowHotmailServiceMode = document.getElementById('row-hotmail-service-mode');
 const hotmailServiceModeButtons = Array.from(document.querySelectorAll('[data-hotmail-service-mode]'));
 const rowHotmailRemoteBaseUrl = document.getElementById('row-hotmail-remote-base-url');
@@ -88,6 +89,24 @@ const btnDeleteAllHotmailAccounts = document.getElementById('btn-delete-all-hotm
 const btnToggleHotmailList = document.getElementById('btn-toggle-hotmail-list');
 const hotmailListShell = document.getElementById('hotmail-list-shell');
 const hotmailAccountsList = document.getElementById('hotmail-accounts-list');
+const inputLuckmailApiKey = document.getElementById('input-luckmail-api-key');
+const inputLuckmailBaseUrl = document.getElementById('input-luckmail-base-url');
+const selectLuckmailEmailType = document.getElementById('select-luckmail-email-type');
+const inputLuckmailDomain = document.getElementById('input-luckmail-domain');
+const btnLuckmailRefresh = document.getElementById('btn-luckmail-refresh');
+const btnLuckmailDisableUsed = document.getElementById('btn-luckmail-disable-used');
+const luckmailSummary = document.getElementById('luckmail-summary');
+const inputLuckmailSearch = document.getElementById('input-luckmail-search');
+const selectLuckmailFilter = document.getElementById('select-luckmail-filter');
+const checkboxLuckmailSelectAll = document.getElementById('checkbox-luckmail-select-all');
+const luckmailSelectionSummary = document.getElementById('luckmail-selection-summary');
+const btnLuckmailBulkUsed = document.getElementById('btn-luckmail-bulk-used');
+const btnLuckmailBulkUnused = document.getElementById('btn-luckmail-bulk-unused');
+const btnLuckmailBulkPreserve = document.getElementById('btn-luckmail-bulk-preserve');
+const btnLuckmailBulkUnpreserve = document.getElementById('btn-luckmail-bulk-unpreserve');
+const btnLuckmailBulkDisable = document.getElementById('btn-luckmail-bulk-disable');
+const btnLuckmailBulkEnable = document.getElementById('btn-luckmail-bulk-enable');
+const luckmailList = document.getElementById('luckmail-list');
 const rowEmailPrefix = document.getElementById('row-email-prefix');
 const labelEmailPrefix = document.getElementById('label-email-prefix');
 const inputEmailPrefix = document.getElementById('input-email-prefix');
@@ -145,6 +164,9 @@ const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 15;
 const AUTO_RUN_FALLBACK_RISK_RECOMMENDED_THREAD_INTERVAL_MINUTES = 5;
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
+const LUCKMAIL_PROVIDER = 'luckmail-api';
+const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
+const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 
 let latestState = null;
@@ -182,8 +204,20 @@ const upsertHotmailAccountInList = window.HotmailUtils?.upsertHotmailAccountInLi
 const filterHotmailAccountsByUsage = window.HotmailUtils?.filterHotmailAccountsByUsage;
 const getHotmailBulkActionLabel = window.HotmailUtils?.getHotmailBulkActionLabel;
 const getHotmailListToggleLabel = window.HotmailUtils?.getHotmailListToggleLabel;
+const normalizeLuckmailTimestampValue = window.LuckMailUtils?.normalizeTimestamp
+  || ((value) => {
+    const timestamp = Date.parse(String(value || ''));
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  });
 const HOTMAIL_LIST_EXPANDED_STORAGE_KEY = 'multipage-hotmail-list-expanded';
 const sidepanelUpdateService = window.SidepanelUpdateService;
+const DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME = window.LuckMailUtils?.DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME || '保留';
+
+let lastRenderedLuckmailPurchases = [];
+let luckmailSelectedPurchaseIds = new Set();
+let luckmailSearchTerm = '';
+let luckmailFilterMode = 'all';
+let luckmailRefreshQueued = false;
 
 btnAutoCancelSchedule?.remove();
 const MAIL_PROVIDER_LOGIN_CONFIGS = {
@@ -933,6 +967,10 @@ function collectSettingsPayload() {
     hotmailServiceMode: getSelectedHotmailServiceMode(),
     hotmailRemoteBaseUrl: inputHotmailRemoteBaseUrl.value.trim(),
     hotmailLocalBaseUrl: inputHotmailLocalBaseUrl.value.trim(),
+    luckmailApiKey: inputLuckmailApiKey.value,
+    luckmailBaseUrl: normalizeLuckmailBaseUrl(inputLuckmailBaseUrl.value),
+    luckmailEmailType: normalizeLuckmailEmailType(selectLuckmailEmailType.value),
+    luckmailDomain: inputLuckmailDomain.value.trim(),
     cloudflareDomain: selectedCloudflareDomain,
     cloudflareDomains: domains,
     autoRunSkipFailures: inputAutoSkipFailures.checked,
@@ -1206,7 +1244,7 @@ function applySettingsState(state) {
   inputSub2ApiPassword.value = state?.sub2apiPassword || '';
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
   const restoredMailProvider = isCustomMailProvider(state?.mailProvider)
-    || ['hotmail-api', '163', '163-vip', 'qq', 'inbucket', '2925'].includes(String(state?.mailProvider || '').trim())
+    || ['hotmail-api', 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925'].includes(String(state?.mailProvider || '').trim())
     ? String(state?.mailProvider || '163').trim()
     : (String(state?.emailGenerator || '').trim().toLowerCase() === 'custom'
       || String(state?.emailGenerator || '').trim().toLowerCase() === 'manual'
@@ -1220,6 +1258,10 @@ function applySettingsState(state) {
   setHotmailServiceMode(state?.hotmailServiceMode);
   inputHotmailRemoteBaseUrl.value = state?.hotmailRemoteBaseUrl || '';
   inputHotmailLocalBaseUrl.value = state?.hotmailLocalBaseUrl || '';
+  inputLuckmailApiKey.value = state?.luckmailApiKey || '';
+  inputLuckmailBaseUrl.value = normalizeLuckmailBaseUrl(state?.luckmailBaseUrl);
+  selectLuckmailEmailType.value = normalizeLuckmailEmailType(state?.luckmailEmailType);
+  inputLuckmailDomain.value = state?.luckmailDomain || '';
   renderCloudflareDomainOptions(state?.cloudflareDomain || '');
   setCloudflareDomainEditMode(false, { clearInput: true });
   inputAutoSkipFailures.checked = Boolean(state?.autoRunSkipFailures);
@@ -1237,6 +1279,9 @@ function applySettingsState(state) {
   updateFallbackThreadIntervalInputState();
   updatePanelModeUI();
   updateMailProviderUI();
+  if (isLuckmailProvider(state?.mailProvider)) {
+    queueLuckmailPurchaseRefresh();
+  }
   updateButtonStates();
 }
 
@@ -1486,6 +1531,37 @@ function isCustomMailProvider(provider = selectMailProvider.value) {
   return String(provider || '').trim().toLowerCase() === 'custom';
 }
 
+function isLuckmailProvider(provider = selectMailProvider.value) {
+  return String(provider || '').trim().toLowerCase() === LUCKMAIL_PROVIDER;
+}
+
+function normalizeLuckmailBaseUrl(value = '') {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return DEFAULT_LUCKMAIL_BASE_URL;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return DEFAULT_LUCKMAIL_BASE_URL;
+    }
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return DEFAULT_LUCKMAIL_BASE_URL;
+  }
+}
+
+function normalizeLuckmailEmailType(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['self_built', 'ms_imap', 'ms_graph', 'google_variant'].includes(normalized)
+    ? normalized
+    : DEFAULT_LUCKMAIL_EMAIL_TYPE;
+}
+
 function getSelectedEmailGenerator() {
   const generator = String(selectEmailGenerator.value || '').trim().toLowerCase();
   if (generator === 'cloudflare') {
@@ -1546,6 +1622,417 @@ function getCurrentHotmailEmail(state = latestState) {
   return String(getCurrentHotmailAccount(state)?.email || '').trim();
 }
 
+function getCurrentLuckmailPurchase(state = latestState) {
+  return state?.currentLuckmailPurchase || null;
+}
+
+function getCurrentLuckmailEmail(state = latestState) {
+  return String(getCurrentLuckmailPurchase(state)?.email_address || '').trim();
+}
+
+function getLuckmailUsedPurchases(state = latestState) {
+  const rawValue = state?.luckmailUsedPurchases;
+  if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+    return {};
+  }
+
+  return Object.entries(rawValue).reduce((result, [key, value]) => {
+    const numeric = Number(key);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      return result;
+    }
+    result[String(Math.floor(numeric))] = Boolean(value);
+    return result;
+  }, {});
+}
+
+function normalizeLuckmailProjectName(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getLuckmailPreserveTagName(state = latestState) {
+  return String(state?.luckmailPreserveTagName || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME;
+}
+
+function formatLuckmailDateTime(value) {
+  const timestamp = normalizeLuckmailTimestampValue(value);
+  if (!timestamp) {
+    return String(value || '').trim() || '未知';
+  }
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
+  });
+}
+
+function normalizeLuckmailSearchText(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getFilteredLuckmailPurchases(purchases = lastRenderedLuckmailPurchases) {
+  const searchTerm = normalizeLuckmailSearchText(luckmailSearchTerm);
+  return (Array.isArray(purchases) ? purchases : []).filter((purchase) => {
+    const matchesFilter = (() => {
+      switch (luckmailFilterMode) {
+        case 'reusable': return Boolean(purchase.reusable);
+        case 'used': return Boolean(purchase.used);
+        case 'unused': return !purchase.used;
+        case 'preserved': return Boolean(purchase.preserved);
+        case 'disabled': return Boolean(purchase.disabled);
+        default: return true;
+      }
+    })();
+
+    if (!matchesFilter) return false;
+    if (!searchTerm) return true;
+
+    const haystack = [
+      purchase.email_address,
+      purchase.project_name,
+      purchase.tag_name,
+      purchase.used ? '已用 used' : '未用 unused',
+      purchase.preserved ? '保留 preserved' : '',
+      purchase.disabled ? '已禁用 disabled' : '',
+      purchase.reusable ? '可复用 reusable' : '',
+    ].join(' ').toLowerCase();
+
+    return haystack.includes(searchTerm);
+  });
+}
+
+function pruneLuckmailSelection(purchases = lastRenderedLuckmailPurchases) {
+  const existingIds = new Set((Array.isArray(purchases) ? purchases : []).map((purchase) => String(purchase.id)));
+  luckmailSelectedPurchaseIds = new Set([...luckmailSelectedPurchaseIds].filter((id) => existingIds.has(id)));
+}
+
+function updateLuckmailBulkUI(visiblePurchases = getFilteredLuckmailPurchases()) {
+  if (!checkboxLuckmailSelectAll || !luckmailSelectionSummary) {
+    return;
+  }
+
+  const visibleIds = visiblePurchases.map((purchase) => String(purchase.id));
+  const selectedVisibleCount = visibleIds.filter((id) => luckmailSelectedPurchaseIds.has(id)).length;
+  const hasVisible = visibleIds.length > 0;
+  const hasSelection = luckmailSelectedPurchaseIds.size > 0;
+
+  checkboxLuckmailSelectAll.checked = hasVisible && selectedVisibleCount === visibleIds.length;
+  checkboxLuckmailSelectAll.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
+  checkboxLuckmailSelectAll.disabled = !hasVisible;
+  luckmailSelectionSummary.textContent = `已选 ${luckmailSelectedPurchaseIds.size} 个（当前显示 ${visibleIds.length} 个）`;
+
+  if (btnLuckmailBulkUsed) btnLuckmailBulkUsed.disabled = !hasSelection;
+  if (btnLuckmailBulkUnused) btnLuckmailBulkUnused.disabled = !hasSelection;
+  if (btnLuckmailBulkPreserve) btnLuckmailBulkPreserve.disabled = !hasSelection;
+  if (btnLuckmailBulkUnpreserve) btnLuckmailBulkUnpreserve.disabled = !hasSelection;
+  if (btnLuckmailBulkDisable) btnLuckmailBulkDisable.disabled = !hasSelection;
+  if (btnLuckmailBulkEnable) btnLuckmailBulkEnable.disabled = !hasSelection;
+}
+
+function setLuckmailLoadingState(loading, summary = '') {
+  if (btnLuckmailRefresh) btnLuckmailRefresh.disabled = loading;
+  if (btnLuckmailDisableUsed) btnLuckmailDisableUsed.disabled = loading;
+  if (inputLuckmailSearch) inputLuckmailSearch.disabled = loading;
+  if (selectLuckmailFilter) selectLuckmailFilter.disabled = loading;
+  if (checkboxLuckmailSelectAll) checkboxLuckmailSelectAll.disabled = loading || getFilteredLuckmailPurchases().length === 0;
+  if (btnLuckmailBulkUsed) btnLuckmailBulkUsed.disabled = loading || luckmailSelectedPurchaseIds.size === 0;
+  if (btnLuckmailBulkUnused) btnLuckmailBulkUnused.disabled = loading || luckmailSelectedPurchaseIds.size === 0;
+  if (btnLuckmailBulkPreserve) btnLuckmailBulkPreserve.disabled = loading || luckmailSelectedPurchaseIds.size === 0;
+  if (btnLuckmailBulkUnpreserve) btnLuckmailBulkUnpreserve.disabled = loading || luckmailSelectedPurchaseIds.size === 0;
+  if (btnLuckmailBulkDisable) btnLuckmailBulkDisable.disabled = loading || luckmailSelectedPurchaseIds.size === 0;
+  if (btnLuckmailBulkEnable) btnLuckmailBulkEnable.disabled = loading || luckmailSelectedPurchaseIds.size === 0;
+  if (summary && luckmailSummary) {
+    luckmailSummary.textContent = summary;
+  }
+}
+
+function renderLuckmailPurchases(purchases = []) {
+  if (!luckmailList || !luckmailSummary) return;
+
+  lastRenderedLuckmailPurchases = Array.isArray(purchases) ? purchases : [];
+  pruneLuckmailSelection(lastRenderedLuckmailPurchases);
+  luckmailList.innerHTML = '';
+
+  if (!lastRenderedLuckmailPurchases.length) {
+    luckmailSelectedPurchaseIds.clear();
+    luckmailList.innerHTML = '<div class="luckmail-empty">未找到 openai 项目的 LuckMail 邮箱。</div>';
+    luckmailSummary.textContent = '加载已购邮箱后可在这里管理 openai 项目的 LuckMail 邮箱。';
+    if (btnLuckmailDisableUsed) btnLuckmailDisableUsed.disabled = true;
+    updateLuckmailBulkUI([]);
+    return;
+  }
+
+  const usedCount = lastRenderedLuckmailPurchases.filter((purchase) => purchase.used).length;
+  const reusableCount = lastRenderedLuckmailPurchases.filter((purchase) => purchase.reusable).length;
+  const disableUsedCount = lastRenderedLuckmailPurchases.filter((purchase) => purchase.used && !purchase.preserved && !purchase.disabled).length;
+  luckmailSummary.textContent = `已加载 ${lastRenderedLuckmailPurchases.length} 个 openai 邮箱，其中 ${reusableCount} 个可复用，${usedCount} 个已本地标记为已用。`;
+  if (btnLuckmailDisableUsed) {
+    btnLuckmailDisableUsed.textContent = `禁用已用${disableUsedCount > 0 ? `（${disableUsedCount}）` : ''}`;
+    btnLuckmailDisableUsed.disabled = disableUsedCount === 0;
+  }
+
+  const visiblePurchases = getFilteredLuckmailPurchases(lastRenderedLuckmailPurchases);
+  if (!visiblePurchases.length) {
+    luckmailList.innerHTML = '<div class="luckmail-empty">没有匹配当前筛选条件的 LuckMail 邮箱。</div>';
+    updateLuckmailBulkUI([]);
+    return;
+  }
+
+  for (const purchase of visiblePurchases) {
+    const purchaseId = String(purchase.id);
+    const item = document.createElement('div');
+    item.className = `luckmail-item${purchase.current ? ' is-current' : ''}`;
+    item.innerHTML = `
+      <input class="luckmail-item-check" type="checkbox" data-action="select" ${luckmailSelectedPurchaseIds.has(purchaseId) ? 'checked' : ''} />
+      <div class="luckmail-item-main">
+        <div class="luckmail-item-email-row">
+          <div class="luckmail-item-email">${escapeHtml(purchase.email_address || '(未知邮箱)')}</div>
+          <button
+            class="hotmail-copy-btn"
+            type="button"
+            data-action="copy-email"
+            title="复制邮箱"
+            aria-label="复制邮箱 ${escapeHtml(purchase.email_address || '')}"
+          >${COPY_ICON}</button>
+        </div>
+        <div class="luckmail-item-meta">
+          <span class="luckmail-tag">${escapeHtml(normalizeLuckmailProjectName(purchase.project_name) || 'openai')}</span>
+          ${purchase.reusable ? '<span class="luckmail-tag active">可复用</span>' : ''}
+          ${purchase.current ? '<span class="luckmail-tag current">当前</span>' : ''}
+          ${purchase.used ? '<span class="luckmail-tag used">已用</span>' : ''}
+          ${purchase.preserved ? '<span class="luckmail-tag">保留</span>' : ''}
+          ${purchase.disabled ? '<span class="luckmail-tag disabled">已禁用</span>' : ''}
+          ${purchase.tag_name && normalizeLuckmailSearchText(purchase.tag_name) !== normalizeLuckmailSearchText(getLuckmailPreserveTagName())
+            ? `<span class="luckmail-tag">${escapeHtml(purchase.tag_name)}</span>`
+            : ''}
+        </div>
+        <div class="luckmail-item-details">
+          <span>ID：${escapeHtml(String(purchase.id || ''))}</span>
+          <span>保修至：${escapeHtml(formatLuckmailDateTime(purchase.warranty_until))}</span>
+        </div>
+      </div>
+      <div class="luckmail-item-actions">
+        <button class="btn btn-outline btn-xs" type="button" data-action="use">使用此邮箱</button>
+        <button class="btn btn-outline btn-xs" type="button" data-action="toggle-used">${escapeHtml(purchase.used ? '标记未用' : '标记已用')}</button>
+        <button class="btn btn-outline btn-xs" type="button" data-action="toggle-preserved">${escapeHtml(purchase.preserved ? '取消保留' : '保留')}</button>
+        <button class="btn btn-outline btn-xs" type="button" data-action="toggle-disabled">${escapeHtml(purchase.disabled ? '启用' : '禁用')}</button>
+      </div>
+    `;
+
+    item.querySelector('[data-action="select"]').addEventListener('change', (event) => {
+      if (event.target.checked) {
+        luckmailSelectedPurchaseIds.add(purchaseId);
+      } else {
+        luckmailSelectedPurchaseIds.delete(purchaseId);
+      }
+      updateLuckmailBulkUI(visiblePurchases);
+    });
+    item.querySelector('[data-action="copy-email"]').addEventListener('click', async () => {
+      await copyTextToClipboard(purchase.email_address || '');
+      showToast('邮箱已复制', 'success', 1600);
+    });
+    item.querySelector('[data-action="use"]').addEventListener('click', async () => {
+      await selectSingleLuckmailPurchase(purchase);
+    });
+    item.querySelector('[data-action="toggle-used"]').addEventListener('click', async () => {
+      await setSingleLuckmailPurchaseUsedState(purchase, !purchase.used);
+    });
+    item.querySelector('[data-action="toggle-preserved"]').addEventListener('click', async () => {
+      await setSingleLuckmailPurchasePreservedState(purchase, !purchase.preserved);
+    });
+    item.querySelector('[data-action="toggle-disabled"]').addEventListener('click', async () => {
+      await setSingleLuckmailPurchaseDisabledState(purchase, !purchase.disabled);
+    });
+    luckmailList.appendChild(item);
+  }
+
+  updateLuckmailBulkUI(visiblePurchases);
+}
+
+async function refreshLuckmailPurchases(options = {}) {
+  const { silent = false } = options;
+  if (!luckmailSection || luckmailSection.style.display === 'none') {
+    return;
+  }
+
+  if (!silent) setLuckmailLoadingState(true, '正在加载 LuckMail openai 邮箱...');
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'LIST_LUCKMAIL_PURCHASES',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (response?.error) throw new Error(response.error);
+    renderLuckmailPurchases(response?.purchases || []);
+  } catch (err) {
+    luckmailSelectedPurchaseIds.clear();
+    if (luckmailList) {
+      luckmailList.innerHTML = '<div class="luckmail-empty">无法加载 LuckMail 邮箱列表。</div>';
+    }
+    if (luckmailSummary) {
+      luckmailSummary.textContent = err.message;
+    }
+    updateLuckmailBulkUI([]);
+    if (!silent) {
+      showToast(`LuckMail 邮箱列表加载失败：${err.message}`, 'error');
+    }
+  } finally {
+    setLuckmailLoadingState(false);
+  }
+}
+
+function queueLuckmailPurchaseRefresh() {
+  if (luckmailRefreshQueued) return;
+  luckmailRefreshQueued = true;
+  setTimeout(async () => {
+    luckmailRefreshQueued = false;
+    await refreshLuckmailPurchases({ silent: true });
+  }, 150);
+}
+
+async function selectSingleLuckmailPurchase(purchase) {
+  setLuckmailLoadingState(true, `正在切换到 ${purchase.email_address} ...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'SELECT_LUCKMAIL_PURCHASE',
+      source: 'sidepanel',
+      payload: { purchaseId: purchase.id },
+    });
+    if (response?.error) throw new Error(response.error);
+    inputEmail.value = response?.purchase?.email_address || purchase.email_address || '';
+    showToast(`已切换当前 LuckMail 邮箱为 ${purchase.email_address}`, 'success', 2200);
+    await refreshLuckmailPurchases({ silent: true });
+  } catch (err) {
+    if (luckmailSummary) luckmailSummary.textContent = err.message;
+    showToast(`切换 LuckMail 邮箱失败：${err.message}`, 'error');
+  } finally {
+    setLuckmailLoadingState(false);
+  }
+}
+
+async function setSingleLuckmailPurchaseUsedState(purchase, used) {
+  setLuckmailLoadingState(true, `正在更新 ${purchase.email_address} 的已用状态...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'SET_LUCKMAIL_PURCHASE_USED_STATE',
+      source: 'sidepanel',
+      payload: { purchaseId: purchase.id, used },
+    });
+    if (response?.error) throw new Error(response.error);
+    showToast(`${purchase.email_address} 已${used ? '标记为已用' : '恢复为未用'}`, 'success', 2200);
+    await refreshLuckmailPurchases({ silent: true });
+  } catch (err) {
+    if (luckmailSummary) luckmailSummary.textContent = err.message;
+    showToast(`更新 LuckMail 已用状态失败：${err.message}`, 'error');
+  } finally {
+    setLuckmailLoadingState(false);
+  }
+}
+
+async function setSingleLuckmailPurchasePreservedState(purchase, preserved) {
+  setLuckmailLoadingState(true, `正在更新 ${purchase.email_address} 的保留状态...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'SET_LUCKMAIL_PURCHASE_PRESERVED_STATE',
+      source: 'sidepanel',
+      payload: { purchaseId: purchase.id, preserved },
+    });
+    if (response?.error) throw new Error(response.error);
+    showToast(`${purchase.email_address} 已${preserved ? '设为保留' : '取消保留'}`, 'success', 2200);
+    await refreshLuckmailPurchases({ silent: true });
+  } catch (err) {
+    if (luckmailSummary) luckmailSummary.textContent = err.message;
+    showToast(`更新 LuckMail 保留状态失败：${err.message}`, 'error');
+  } finally {
+    setLuckmailLoadingState(false);
+  }
+}
+
+async function setSingleLuckmailPurchaseDisabledState(purchase, disabled) {
+  setLuckmailLoadingState(true, `正在${disabled ? '禁用' : '启用'} ${purchase.email_address} ...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'SET_LUCKMAIL_PURCHASE_DISABLED_STATE',
+      source: 'sidepanel',
+      payload: { purchaseId: purchase.id, disabled },
+    });
+    if (response?.error) throw new Error(response.error);
+    showToast(`${purchase.email_address} 已${disabled ? '禁用' : '启用'}`, 'success', 2200);
+    await refreshLuckmailPurchases({ silent: true });
+  } catch (err) {
+    if (luckmailSummary) luckmailSummary.textContent = err.message;
+    showToast(`更新 LuckMail 禁用状态失败：${err.message}`, 'error');
+  } finally {
+    setLuckmailLoadingState(false);
+  }
+}
+
+async function runBulkLuckmailAction(action) {
+  const selectedIds = lastRenderedLuckmailPurchases
+    .filter((purchase) => luckmailSelectedPurchaseIds.has(String(purchase.id)))
+    .map((purchase) => purchase.id);
+  if (!selectedIds.length) {
+    updateLuckmailBulkUI();
+    return;
+  }
+
+  const actionLabelMap = {
+    used: '标记已用',
+    unused: '标记未用',
+    preserve: '保留',
+    unpreserve: '取消保留',
+    disable: '禁用',
+    enable: '启用',
+  };
+
+  setLuckmailLoadingState(true, `正在批量${actionLabelMap[action] || '处理'} LuckMail 邮箱...`);
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'BATCH_UPDATE_LUCKMAIL_PURCHASES',
+      source: 'sidepanel',
+      payload: { action, ids: selectedIds },
+    });
+    if (response?.error) throw new Error(response.error);
+    showToast(`已批量${actionLabelMap[action] || '处理'} ${selectedIds.length} 个 LuckMail 邮箱`, 'success', 2400);
+    await refreshLuckmailPurchases({ silent: true });
+  } catch (err) {
+    if (luckmailSummary) luckmailSummary.textContent = err.message;
+    showToast(`批量处理 LuckMail 邮箱失败：${err.message}`, 'error');
+  } finally {
+    setLuckmailLoadingState(false);
+    updateLuckmailBulkUI();
+  }
+}
+
+async function disableUsedLuckmailPurchases() {
+  const confirmed = await openConfirmModal({
+    title: '禁用已用 LuckMail 邮箱',
+    message: '确认禁用所有本地已用且未保留的 openai LuckMail 邮箱吗？',
+    confirmLabel: '确认禁用',
+    confirmVariant: 'btn-danger',
+  });
+  if (!confirmed) {
+    return;
+  }
+
+  setLuckmailLoadingState(true, '正在禁用已用 LuckMail 邮箱...');
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'DISABLE_USED_LUCKMAIL_PURCHASES',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (response?.error) throw new Error(response.error);
+    const disabledCount = Array.isArray(response?.disabledIds) ? response.disabledIds.length : 0;
+    showToast(`已禁用 ${disabledCount} 个 LuckMail 邮箱`, disabledCount > 0 ? 'success' : 'info', 2400);
+    await refreshLuckmailPurchases({ silent: true });
+  } catch (err) {
+    if (luckmailSummary) luckmailSummary.textContent = err.message;
+    showToast(`禁用已用 LuckMail 邮箱失败：${err.message}`, 'error');
+  } finally {
+    setLuckmailLoadingState(false);
+  }
+}
+
 function getMailProviderLoginConfig(provider = selectMailProvider.value) {
   return MAIL_PROVIDER_LOGIN_CONFIGS[String(provider || '').trim()] || null;
 }
@@ -1565,6 +2052,17 @@ function isCurrentEmailManagedByHotmail(state = latestState) {
   const inputEmailValue = String(inputEmail.value || '').trim();
   const stateEmailValue = String(state?.email || '').trim();
   return inputEmailValue === hotmailEmail || stateEmailValue === hotmailEmail;
+}
+
+function isCurrentEmailManagedByLuckmail(state = latestState) {
+  const luckmailEmail = getCurrentLuckmailEmail(state);
+  if (!luckmailEmail) {
+    return false;
+  }
+
+  const inputEmailValue = String(inputEmail.value || '').trim();
+  const stateEmailValue = String(state?.email || '').trim();
+  return inputEmailValue === luckmailEmail || stateEmailValue === luckmailEmail;
 }
 
 function isCurrentEmailManagedByGeneratedAlias(provider = latestState?.mailProvider, state = latestState) {
@@ -1806,8 +2304,9 @@ function updateMailProviderUI() {
   const useGeneratedAlias = usesGeneratedAliasMailProvider(selectMailProvider.value);
   const useInbucket = selectMailProvider.value === 'inbucket';
   const useHotmail = selectMailProvider.value === 'hotmail-api';
+  const useLuckmail = isLuckmailProvider();
   const useCustomEmail = isCustomMailProvider();
-  const useEmailGenerator = !useHotmail && !useGeneratedAlias && !useCustomEmail;
+  const useEmailGenerator = !useHotmail && !useLuckmail && !useGeneratedAlias && !useCustomEmail;
   updateMailLoginButtonState();
   rowEmailPrefix.style.display = useGeneratedAlias ? '' : 'none';
   const hotmailServiceMode = getSelectedHotmailServiceMode();
@@ -1829,9 +2328,12 @@ function updateMailProviderUI() {
   if (hotmailSection) {
     hotmailSection.style.display = useHotmail ? '' : 'none';
   }
+  if (luckmailSection) {
+    luckmailSection.style.display = useLuckmail ? '' : 'none';
+  }
   labelEmailPrefix.textContent = '邮箱前缀';
   inputEmailPrefix.placeholder = '例如 abc';
-  selectEmailGenerator.disabled = useHotmail || useGeneratedAlias || useCustomEmail;
+  selectEmailGenerator.disabled = useHotmail || useLuckmail || useGeneratedAlias || useCustomEmail;
   if (rowHotmailServiceMode) {
     rowHotmailServiceMode.style.display = useHotmail ? '' : 'none';
   }
@@ -1841,27 +2343,36 @@ function updateMailProviderUI() {
   if (rowHotmailLocalBaseUrl) {
     rowHotmailLocalBaseUrl.style.display = useHotmail && hotmailServiceMode === HOTMAIL_SERVICE_MODE_LOCAL ? '' : 'none';
   }
-  btnFetchEmail.hidden = useHotmail || useCustomEmail;
-  inputEmail.readOnly = useHotmail || useGeneratedAlias;
+  btnFetchEmail.hidden = useHotmail || useLuckmail || useCustomEmail;
+  inputEmail.readOnly = useHotmail || useLuckmail || useGeneratedAlias;
   const uiCopy = useCustomEmail ? getCustomMailProviderUiCopy() : getEmailGeneratorUiCopy();
   inputEmail.placeholder = useHotmail
     ? '由 Hotmail 账号池自动分配'
-    : (use2925 ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder);
-  btnFetchEmail.disabled = useGeneratedAlias || useCustomEmail || isAutoRunLockedPhase();
+    : (useLuckmail
+      ? '步骤 3 自动购买 LuckMail 邮箱并回填'
+      : (use2925 ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder));
+  btnFetchEmail.disabled = useGeneratedAlias || useLuckmail || useCustomEmail || isAutoRunLockedPhase();
   if (!btnFetchEmail.disabled) {
     btnFetchEmail.textContent = uiCopy.buttonLabel;
   }
   if (autoHintText) {
     autoHintText.textContent = useHotmail
       ? '请先校验并选择一个 Hotmail 账号'
+      : (useLuckmail
+        ? '步骤 3 会自动购买 LuckMail 邮箱并用于收码'
       : (useGeneratedAlias
         ? '步骤 3 会自动生成邮箱，无需手动获取'
-        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : '先自动获取邮箱，或手动粘贴邮箱后再继续'));
+        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : '先自动获取邮箱，或手动粘贴邮箱后再继续')));
   }
   if (useHotmail) {
     inputEmail.value = getCurrentHotmailEmail();
+  } else if (useLuckmail) {
+    inputEmail.value = getCurrentLuckmailEmail();
   }
   renderHotmailAccounts();
+  if (useLuckmail) {
+    renderLuckmailPurchases(lastRenderedLuckmailPurchases);
+  }
 }
 
 async function saveCloudflareDomainSettings(domains, activeDomain, options = {}) {
@@ -2397,7 +2908,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
           syncLatestState({ customPassword: inputPassword.value });
         }
         let email = inputEmail.value.trim();
-        if (selectMailProvider.value === 'hotmail-api') {
+        if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
           const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
           if (response?.error) {
             throw new Error(response.error);
@@ -2444,7 +2955,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
 });
 
 btnFetchEmail.addEventListener('click', async () => {
-  if (selectMailProvider.value === 'hotmail-api' || isCustomMailProvider()) {
+  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider() || isCustomMailProvider()) {
     return;
   }
   await fetchGeneratedEmail().catch(() => { });
@@ -2908,7 +3419,13 @@ btnReset.addEventListener('click', async () => {
   }
 
   await chrome.runtime.sendMessage({ type: 'RESET', source: 'sidepanel' });
-  syncLatestState({ stepStatuses: STEP_DEFAULT_STATUSES, currentHotmailAccountId: null, email: null });
+  syncLatestState({
+    stepStatuses: STEP_DEFAULT_STATUSES,
+    currentHotmailAccountId: null,
+    currentLuckmailPurchase: null,
+    currentLuckmailMailCursor: null,
+    email: null,
+  });
   syncAutoRunState({
     autoRunning: false,
     autoRunPhase: 'idle',
@@ -2937,6 +3454,10 @@ btnReset.addEventListener('click', async () => {
   updateButtonStates();
   updateProgressCounter();
   renderHotmailAccounts();
+  renderLuckmailPurchases(lastRenderedLuckmailPurchases);
+  if (isLuckmailProvider()) {
+    queueLuckmailPurchaseRefresh();
+  }
 });
 
 // Clear log
@@ -2946,7 +3467,7 @@ btnClearLog.addEventListener('click', () => {
 
 // Save settings on change
 inputEmail.addEventListener('change', async () => {
-  if (selectMailProvider.value === 'hotmail-api') {
+  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
     return;
   }
   const email = inputEmail.value.trim();
@@ -2991,6 +3512,73 @@ inputVpsPassword.addEventListener('blur', () => {
   });
 });
 
+[inputLuckmailApiKey, inputLuckmailBaseUrl, inputLuckmailDomain].forEach((input) => {
+  input?.addEventListener('input', () => {
+    markSettingsDirty(true);
+    scheduleSettingsAutoSave();
+  });
+  input?.addEventListener('blur', () => {
+    saveSettings({ silent: true }).catch(() => { });
+  });
+});
+
+selectLuckmailEmailType?.addEventListener('change', () => {
+  markSettingsDirty(true);
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+inputLuckmailSearch?.addEventListener('input', (event) => {
+  luckmailSearchTerm = event.target.value || '';
+  renderLuckmailPurchases(lastRenderedLuckmailPurchases);
+});
+
+selectLuckmailFilter?.addEventListener('change', (event) => {
+  luckmailFilterMode = String(event.target.value || 'all').trim() || 'all';
+  renderLuckmailPurchases(lastRenderedLuckmailPurchases);
+});
+
+checkboxLuckmailSelectAll?.addEventListener('change', () => {
+  const visiblePurchases = getFilteredLuckmailPurchases();
+  if (checkboxLuckmailSelectAll.checked) {
+    visiblePurchases.forEach((purchase) => luckmailSelectedPurchaseIds.add(String(purchase.id)));
+  } else {
+    visiblePurchases.forEach((purchase) => luckmailSelectedPurchaseIds.delete(String(purchase.id)));
+  }
+  renderLuckmailPurchases(lastRenderedLuckmailPurchases);
+});
+
+btnLuckmailRefresh?.addEventListener('click', async () => {
+  await refreshLuckmailPurchases();
+});
+
+btnLuckmailDisableUsed?.addEventListener('click', async () => {
+  await disableUsedLuckmailPurchases();
+});
+
+btnLuckmailBulkUsed?.addEventListener('click', async () => {
+  await runBulkLuckmailAction('used');
+});
+
+btnLuckmailBulkUnused?.addEventListener('click', async () => {
+  await runBulkLuckmailAction('unused');
+});
+
+btnLuckmailBulkPreserve?.addEventListener('click', async () => {
+  await runBulkLuckmailAction('preserve');
+});
+
+btnLuckmailBulkUnpreserve?.addEventListener('click', async () => {
+  await runBulkLuckmailAction('unpreserve');
+});
+
+btnLuckmailBulkDisable?.addEventListener('click', async () => {
+  await runBulkLuckmailAction('disable');
+});
+
+btnLuckmailBulkEnable?.addEventListener('click', async () => {
+  await runBulkLuckmailAction('enable');
+});
+
 inputPassword.addEventListener('input', () => {
   markSettingsDirty(true);
   updateButtonStates();
@@ -3007,11 +3595,17 @@ selectMailProvider.addEventListener('change', async () => {
   const leavingHotmail = previousProvider === 'hotmail-api'
     && nextProvider !== 'hotmail-api'
     && isCurrentEmailManagedByHotmail();
+  const leavingLuckmail = previousProvider === LUCKMAIL_PROVIDER
+    && nextProvider !== LUCKMAIL_PROVIDER
+    && isCurrentEmailManagedByLuckmail();
   const leavingGeneratedAlias = previousProvider !== nextProvider
     && usesGeneratedAliasMailProvider(previousProvider)
     && isCurrentEmailManagedByGeneratedAlias(previousProvider);
-  if (leavingHotmail || leavingGeneratedAlias) {
+  if (leavingHotmail || leavingLuckmail || leavingGeneratedAlias) {
     await clearRegistrationEmail({ silent: true }).catch(() => { });
+  }
+  if (nextProvider === LUCKMAIL_PROVIDER) {
+    queueLuckmailPurchaseRefresh();
   }
   markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => { });
@@ -3307,6 +3901,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (selectMailProvider.value === 'hotmail-api') {
           inputEmail.value = getCurrentHotmailEmail();
         }
+      }
+      if (message.payload.luckmailApiKey !== undefined) {
+        inputLuckmailApiKey.value = message.payload.luckmailApiKey || '';
+      }
+      if (message.payload.luckmailBaseUrl !== undefined) {
+        inputLuckmailBaseUrl.value = normalizeLuckmailBaseUrl(message.payload.luckmailBaseUrl);
+      }
+      if (message.payload.luckmailEmailType !== undefined) {
+        selectLuckmailEmailType.value = normalizeLuckmailEmailType(message.payload.luckmailEmailType);
+      }
+      if (message.payload.luckmailDomain !== undefined) {
+        inputLuckmailDomain.value = message.payload.luckmailDomain || '';
+      }
+      if (message.payload.luckmailUsedPurchases !== undefined && isLuckmailProvider()) {
+        queueLuckmailPurchaseRefresh();
+      }
+      if (message.payload.currentLuckmailPurchase !== undefined && isLuckmailProvider()) {
+        inputEmail.value = getCurrentLuckmailEmail();
+        queueLuckmailPurchaseRefresh();
       }
       if (message.payload.autoRunSkipFailures !== undefined) {
         inputAutoSkipFailures.checked = Boolean(message.payload.autoRunSkipFailures);

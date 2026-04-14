@@ -1,6 +1,6 @@
 // background.js — Service Worker: orchestration, state, tab management, message routing
 
-importScripts('data/names.js', 'hotmail-utils.js', 'content/activation-utils.js');
+importScripts('data/names.js', 'hotmail-utils.js', 'luckmail-utils.js', 'content/activation-utils.js');
 
 const {
   buildHotmailMailApiLatestUrl,
@@ -18,12 +18,40 @@ const {
   shouldClearHotmailCurrentSelection,
 } = self.HotmailUtils;
 const {
+  DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+  DEFAULT_LUCKMAIL_BASE_URL,
+  DEFAULT_LUCKMAIL_EMAIL_TYPE,
+  buildLuckmailBaselineCursor,
+  buildLuckmailMailCursor,
+  filterReusableLuckmailPurchases,
+  isLuckmailMailNewerThanCursor,
+  isLuckmailPurchaseReusable,
+  isLuckmailPurchaseForProject,
+  isLuckmailPurchasePreserved,
+  normalizeLuckmailBaseUrl,
+  normalizeLuckmailEmailType,
+  normalizeLuckmailMailCursor,
+  normalizeLuckmailProjectName,
+  normalizeLuckmailPurchase,
+  normalizeLuckmailPurchaseId,
+  normalizeLuckmailPurchaseListPage,
+  normalizeLuckmailPurchases,
+  normalizeLuckmailTags,
+  normalizeLuckmailTokenCode,
+  normalizeLuckmailTokenMail,
+  normalizeLuckmailTokenMails,
+  normalizeLuckmailUsedPurchases,
+  normalizeTimestamp: normalizeLuckmailTimestamp,
+  pickLuckmailVerificationMail,
+} = self.LuckMailUtils;
+const {
   isRecoverableStep9AuthFailure,
 } = self.MultiPageActivationUtils;
 
 const LOG_PREFIX = '[MultiPage:bg]';
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
 const HOTMAIL_PROVIDER = 'hotmail-api';
+const LUCKMAIL_PROVIDER = 'luckmail-api';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const HUMAN_STEP_DELAY_MIN = 700;
@@ -48,6 +76,7 @@ const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
 const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
 const HOTMAIL_LOCAL_HELPER_TIMEOUT_MS = 45000;
+const DEFAULT_LUCKMAIL_PROJECT_CODE = 'openai';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 
 initializeSessionStorageAccess();
@@ -111,6 +140,15 @@ const DEFAULT_STATE = {
   sourceLastUrls: {}, // 各来源页面最近一次打开的地址记录。
   logs: [], // 侧边栏展示的运行日志。
   ...PERSISTED_SETTING_DEFAULTS, // 合并 chrome.storage.local 中持久化保存的用户配置。
+  luckmailApiKey: '',
+  luckmailBaseUrl: DEFAULT_LUCKMAIL_BASE_URL,
+  luckmailEmailType: DEFAULT_LUCKMAIL_EMAIL_TYPE,
+  luckmailDomain: '',
+  luckmailUsedPurchases: {},
+  luckmailPreserveTagId: 0,
+  luckmailPreserveTagName: DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+  currentLuckmailPurchase: null,
+  currentLuckmailMailCursor: null,
   autoRunning: false, // 当前是否处于自动运行中。
   autoRunPhase: 'idle', // 当前自动运行阶段。
   autoRunCurrentRun: 0, // 自动运行当前执行到第几轮。
@@ -233,6 +271,7 @@ function normalizeMailProvider(value = '') {
   switch (normalized) {
     case 'custom':
     case HOTMAIL_PROVIDER:
+    case LUCKMAIL_PROVIDER:
     case '163':
     case '163-vip':
     case 'qq':
@@ -242,6 +281,48 @@ function normalizeMailProvider(value = '') {
     default:
       return PERSISTED_SETTING_DEFAULTS.mailProvider;
   }
+}
+
+function buildLuckmailSessionSettingsPayload(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return {};
+  }
+
+  const payload = {};
+
+  if (input.luckmailApiKey !== undefined) {
+    payload.luckmailApiKey = String(input.luckmailApiKey || '');
+  }
+  if (input.luckmailBaseUrl !== undefined) {
+    payload.luckmailBaseUrl = normalizeLuckmailBaseUrl(input.luckmailBaseUrl);
+  }
+  if (input.luckmailEmailType !== undefined) {
+    payload.luckmailEmailType = normalizeLuckmailEmailType(input.luckmailEmailType);
+  }
+  if (input.luckmailDomain !== undefined) {
+    payload.luckmailDomain = String(input.luckmailDomain || '').trim();
+  }
+  if (input.luckmailUsedPurchases !== undefined) {
+    payload.luckmailUsedPurchases = normalizeLuckmailUsedPurchases(input.luckmailUsedPurchases);
+  }
+  if (input.luckmailPreserveTagId !== undefined) {
+    payload.luckmailPreserveTagId = Number(input.luckmailPreserveTagId) || 0;
+  }
+  if (input.luckmailPreserveTagName !== undefined) {
+    payload.luckmailPreserveTagName = String(input.luckmailPreserveTagName || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME;
+  }
+  if (input.currentLuckmailPurchase !== undefined) {
+    payload.currentLuckmailPurchase = input.currentLuckmailPurchase
+      ? normalizeLuckmailPurchase(input.currentLuckmailPurchase)
+      : null;
+  }
+  if (input.currentLuckmailMailCursor !== undefined) {
+    payload.currentLuckmailMailCursor = input.currentLuckmailMailCursor
+      ? normalizeLuckmailMailCursor(input.currentLuckmailMailCursor)
+      : null;
+  }
+
+  return payload;
 }
 
 function normalizeLocalCpaStep9Mode(value = '') {
@@ -551,6 +632,86 @@ async function setPasswordState(password) {
   broadcastDataUpdate({ password });
 }
 
+function getLuckmailUsedPurchases(state = {}) {
+  return normalizeLuckmailUsedPurchases(state?.luckmailUsedPurchases);
+}
+
+function getLuckmailPreserveTagInfo(state = {}) {
+  return {
+    id: Number(state?.luckmailPreserveTagId) || 0,
+    name: String(state?.luckmailPreserveTagName || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+  };
+}
+
+async function setLuckmailUsedPurchasesState(usedPurchases) {
+  const normalizedUsedPurchases = normalizeLuckmailUsedPurchases(usedPurchases);
+  await setState({ luckmailUsedPurchases: normalizedUsedPurchases });
+  broadcastDataUpdate({ luckmailUsedPurchases: normalizedUsedPurchases });
+  return normalizedUsedPurchases;
+}
+
+async function setLuckmailPurchaseUsedState(purchaseId, used) {
+  const normalizedPurchaseId = normalizeLuckmailPurchaseId(purchaseId);
+  if (!normalizedPurchaseId) {
+    throw new Error('LuckMail 邮箱 ID 无效。');
+  }
+
+  const state = await getState();
+  const usedPurchases = getLuckmailUsedPurchases(state);
+  if (used) {
+    usedPurchases[normalizedPurchaseId] = true;
+  } else {
+    delete usedPurchases[normalizedPurchaseId];
+  }
+
+  await setLuckmailUsedPurchasesState(usedPurchases);
+  return {
+    purchaseId: Number(normalizedPurchaseId),
+    used: Boolean(used),
+  };
+}
+
+async function setLuckmailPreserveTagInfo(tag) {
+  const normalizedTags = normalizeLuckmailTags([tag]);
+  const normalizedTag = normalizedTags[0] || {
+    id: 0,
+    name: DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+  };
+  const updates = {
+    luckmailPreserveTagId: Number(normalizedTag.id) || 0,
+    luckmailPreserveTagName: String(normalizedTag.name || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+  };
+  await setState(updates);
+  broadcastDataUpdate(updates);
+  return updates;
+}
+
+async function setLuckmailPurchaseState(purchase) {
+  const normalizedPurchase = purchase ? normalizeLuckmailPurchase(purchase) : null;
+  await setState({ currentLuckmailPurchase: normalizedPurchase });
+  broadcastDataUpdate({ currentLuckmailPurchase: normalizedPurchase });
+  return normalizedPurchase;
+}
+
+async function setLuckmailMailCursorState(cursor) {
+  const normalizedCursor = cursor ? normalizeLuckmailMailCursor(cursor) : null;
+  await setState({ currentLuckmailMailCursor: normalizedCursor });
+  return normalizedCursor;
+}
+
+async function clearLuckmailRuntimeState(options = {}) {
+  const { clearEmail = false } = options;
+  const updates = {
+    currentLuckmailPurchase: null,
+    currentLuckmailMailCursor: null,
+  };
+  if (clearEmail) {
+    updates.email = null;
+  }
+  await setState(updates);
+  broadcastDataUpdate(updates);
+}
+
 async function resetState() {
   console.log(LOG_PREFIX, 'Resetting all state');
   // Preserve settings and persistent data across resets
@@ -561,6 +722,13 @@ async function resetState() {
       'accounts',
       'tabRegistry',
       'sourceLastUrls',
+      'luckmailApiKey',
+      'luckmailBaseUrl',
+      'luckmailEmailType',
+      'luckmailDomain',
+      'luckmailUsedPurchases',
+      'luckmailPreserveTagId',
+      'luckmailPreserveTagName',
     ]),
     getPersistedSettings(),
   ]);
@@ -573,6 +741,15 @@ async function resetState() {
     accounts: prev.accounts || [],
     tabRegistry: prev.tabRegistry || {},
     sourceLastUrls: prev.sourceLastUrls || {},
+    luckmailApiKey: String(prev.luckmailApiKey || ''),
+    luckmailBaseUrl: normalizeLuckmailBaseUrl(prev.luckmailBaseUrl),
+    luckmailEmailType: normalizeLuckmailEmailType(prev.luckmailEmailType),
+    luckmailDomain: String(prev.luckmailDomain || '').trim(),
+    luckmailUsedPurchases: normalizeLuckmailUsedPurchases(prev.luckmailUsedPurchases),
+    luckmailPreserveTagId: Number(prev.luckmailPreserveTagId) || 0,
+    luckmailPreserveTagName: String(prev.luckmailPreserveTagName || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+    currentLuckmailPurchase: null,
+    currentLuckmailMailCursor: null,
   });
 }
 
@@ -644,6 +821,13 @@ function isHotmailProvider(stateOrProvider) {
     ? stateOrProvider
     : stateOrProvider?.mailProvider;
   return provider === HOTMAIL_PROVIDER;
+}
+
+function isLuckmailProvider(stateOrProvider) {
+  const provider = typeof stateOrProvider === 'string'
+    ? stateOrProvider
+    : stateOrProvider?.mailProvider;
+  return provider === LUCKMAIL_PROVIDER;
 }
 
 function isCustomMailProvider(stateOrProvider) {
@@ -1300,6 +1484,703 @@ function buildGeneratedAliasEmail(state) {
   }
 
   throw new Error(`未支持的别名邮箱类型：${provider}`);
+}
+
+function getLuckmailSessionConfig(state = {}) {
+  return {
+    apiKey: String(state.luckmailApiKey || ''),
+    baseUrl: normalizeLuckmailBaseUrl(state.luckmailBaseUrl),
+    emailType: normalizeLuckmailEmailType(state.luckmailEmailType),
+    domain: String(state.luckmailDomain || '').trim(),
+  };
+}
+
+function ensureLuckmailApiKey(state = {}) {
+  const apiKey = String(state.luckmailApiKey || '').trim();
+  if (!apiKey) {
+    throw new Error('LuckMail API Key 为空，请先在侧边栏填写。');
+  }
+  return apiKey;
+}
+
+async function requestLuckmail(method, path, { baseUrl, apiKey, params, jsonData, timeout = 30000 } = {}) {
+  const requestUrl = new URL(`${normalizeLuckmailBaseUrl(baseUrl)}${path}`);
+  if (params && typeof params === 'object') {
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null || value === '') continue;
+      requestUrl.searchParams.set(key, String(value));
+    }
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const headers = {
+    Accept: 'application/json',
+  };
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey;
+  }
+
+  const upperMethod = String(method || 'GET').toUpperCase();
+  const fetchOptions = {
+    method: upperMethod,
+    headers,
+    signal: controller.signal,
+  };
+  if (jsonData !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    fetchOptions.body = JSON.stringify(jsonData || {});
+  }
+
+  let response = null;
+  try {
+    response = await fetch(requestUrl.toString(), fetchOptions);
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`LuckMail 请求超时：${path}`);
+    }
+    throw new Error(`LuckMail 请求失败：${err.message}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(`LuckMail 返回了无法解析的响应：${path}`);
+  }
+
+  if (!response.ok) {
+    const errorText = String(payload?.message || response.statusText || 'HTTP error');
+    throw new Error(`LuckMail 请求失败：${errorText}`);
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    throw new Error(`LuckMail 返回数据无效：${path}`);
+  }
+
+  if (payload.code !== 0) {
+    const errorText = String(payload.message || 'Unknown error');
+    throw new Error(`LuckMail 接口返回失败：${errorText}`);
+  }
+
+  return payload.data;
+}
+
+function createLuckmailClient(state = {}) {
+  const config = getLuckmailSessionConfig(state);
+  const apiKey = ensureLuckmailApiKey(state);
+  const request = (method, path, options = {}) => requestLuckmail(method, path, {
+    baseUrl: config.baseUrl,
+    apiKey,
+    ...options,
+  });
+
+  return {
+    user: {
+      async purchaseEmails(projectCode, quantity, { emailType, domain } = {}) {
+        const body = {
+          project_code: projectCode,
+          quantity,
+          email_type: normalizeLuckmailEmailType(emailType),
+        };
+        if (domain) {
+          body.domain = String(domain).trim();
+        }
+        return request('POST', '/api/v1/openapi/email/purchase', {
+          jsonData: body,
+        });
+      },
+      async getPurchases({ page = 1, pageSize = 100, projectId, tagId, keyword, userDisabled } = {}) {
+        return normalizeLuckmailPurchaseListPage(await request('GET', '/api/v1/openapi/email/purchases', {
+          params: {
+            page,
+            page_size: pageSize,
+            project_id: projectId,
+            tag_id: tagId,
+            keyword,
+            user_disabled: userDisabled,
+          },
+        }));
+      },
+      async getTokenCode(token) {
+        return normalizeLuckmailTokenCode(await request(
+          'GET',
+          `/api/v1/openapi/email/token/${encodeURIComponent(token)}/code`
+        ));
+      },
+      async checkTokenAlive(token) {
+        const data = await request(
+          'GET',
+          `/api/v1/openapi/email/token/${encodeURIComponent(token)}/alive`
+        );
+        return {
+          email_address: String(data?.email_address || ''),
+          project: String(data?.project || ''),
+          alive: Boolean(data?.alive),
+          status: String(data?.status || ''),
+          message: String(data?.message || ''),
+          mail_count: Number(data?.mail_count) || 0,
+        };
+      },
+      async getTokenMails(token) {
+        const data = await request('GET', `/api/v1/openapi/email/token/${encodeURIComponent(token)}/mails`);
+        return {
+          email_address: String(data?.email_address || ''),
+          project: String(data?.project || ''),
+          warranty_until: String(data?.warranty_until || ''),
+          mails: normalizeLuckmailTokenMails(data?.mails || []),
+        };
+      },
+      async getTokenMailDetail(token, messageId) {
+        return normalizeLuckmailTokenMail(await request(
+          'GET',
+          `/api/v1/openapi/email/token/${encodeURIComponent(token)}/mails/${encodeURIComponent(messageId)}`
+        ));
+      },
+      async setPurchaseDisabled(purchaseId, disabled) {
+        await request('PUT', `/api/v1/openapi/email/purchases/${encodeURIComponent(purchaseId)}/disabled`, {
+          jsonData: {
+            disabled: disabled ? 1 : 0,
+          },
+        });
+      },
+      async batchSetPurchaseDisabled(ids, disabled) {
+        await request('POST', '/api/v1/openapi/email/purchases/batch-disabled', {
+          jsonData: {
+            ids: (Array.isArray(ids) ? ids : []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
+            disabled: disabled ? 1 : 0,
+          },
+        });
+      },
+      async setPurchaseTag(purchaseId, { tagId, tagName } = {}) {
+        const body = {};
+        if (tagId !== undefined) {
+          body.tag_id = Number(tagId) || 0;
+        }
+        if (tagName !== undefined) {
+          body.tag_name = String(tagName || '').trim();
+        }
+        await request('PUT', `/api/v1/openapi/email/purchases/${encodeURIComponent(purchaseId)}/tag`, {
+          jsonData: body,
+        });
+      },
+      async batchSetPurchaseTag(ids, { tagId, tagName } = {}) {
+        const body = {
+          ids: (Array.isArray(ids) ? ids : []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0),
+        };
+        if (tagId !== undefined) {
+          body.tag_id = Number(tagId) || 0;
+        }
+        if (tagName !== undefined) {
+          body.tag_name = String(tagName || '').trim();
+        }
+        await request('POST', '/api/v1/openapi/email/purchases/batch-tag', {
+          jsonData: body,
+        });
+      },
+      async getTags() {
+        return normalizeLuckmailTags(await request('GET', '/api/v1/openapi/email/tags'));
+      },
+      async createTag(name, limitType, remark) {
+        const body = {
+          name: String(name || '').trim(),
+          limit_type: Number(limitType) || 0,
+        };
+        if (remark !== undefined) {
+          body.remark = String(remark || '').trim();
+        }
+        return normalizeLuckmailTags([await request('POST', '/api/v1/openapi/email/tags', {
+          jsonData: body,
+        })])[0] || null;
+      },
+    },
+  };
+}
+
+function getCurrentLuckmailPurchase(state = {}) {
+  return state.currentLuckmailPurchase
+    ? normalizeLuckmailPurchase(state.currentLuckmailPurchase)
+    : null;
+}
+
+function buildLuckmailPurchaseView(purchase, state = {}) {
+  const normalizedPurchase = normalizeLuckmailPurchase(purchase);
+  const usedPurchases = getLuckmailUsedPurchases(state);
+  const preserveTagInfo = getLuckmailPreserveTagInfo(state);
+
+  return {
+    id: normalizedPurchase.id,
+    email_address: normalizedPurchase.email_address,
+    project_name: normalizeLuckmailProjectName(normalizedPurchase.project_name) || DEFAULT_LUCKMAIL_PROJECT_CODE,
+    price: normalizedPurchase.price,
+    status: normalizedPurchase.status,
+    tag_id: normalizedPurchase.tag_id,
+    tag_name: normalizedPurchase.tag_name,
+    user_disabled: normalizedPurchase.user_disabled,
+    warranty_hours: normalizedPurchase.warranty_hours,
+    warranty_until: normalizedPurchase.warranty_until,
+    created_at: normalizedPurchase.created_at,
+    used: Boolean(usedPurchases[normalizeLuckmailPurchaseId(normalizedPurchase.id)]),
+    preserved: isLuckmailPurchasePreserved(normalizedPurchase, {
+      preserveTagId: preserveTagInfo.id,
+      preserveTagName: preserveTagInfo.name,
+    }),
+    disabled: normalizedPurchase.user_disabled === 1,
+    current: Number(getCurrentLuckmailPurchase(state)?.id) === normalizedPurchase.id,
+    reusable: isLuckmailPurchaseReusable(normalizedPurchase, {
+      projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+      usedPurchases,
+      preserveTagId: preserveTagInfo.id,
+      preserveTagName: preserveTagInfo.name,
+      now: Date.now(),
+    }),
+  };
+}
+
+async function getAllLuckmailPurchases(state, options = {}) {
+  const client = options.client || createLuckmailClient(state);
+  const pageSize = Math.max(1, Math.min(100, Number(options.pageSize) || 100));
+  const maxPages = Math.max(1, Number(options.maxPages) || 50);
+  const purchases = [];
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const pageResult = await client.user.getPurchases({
+      page,
+      pageSize,
+      keyword: options.keyword,
+      projectId: options.projectId,
+      tagId: options.tagId,
+      userDisabled: options.userDisabled,
+    });
+    const normalizedPage = normalizeLuckmailPurchaseListPage(pageResult);
+    purchases.push(...normalizedPage.list);
+
+    if (normalizedPage.list.length === 0) {
+      break;
+    }
+    if (normalizedPage.total > 0 && purchases.length >= normalizedPage.total) {
+      break;
+    }
+    if (normalizedPage.list.length < normalizedPage.page_size) {
+      break;
+    }
+  }
+
+  return purchases;
+}
+
+async function listLuckmailPurchasesByProject(state, options = {}) {
+  const projectCode = normalizeLuckmailProjectName(options.projectCode || DEFAULT_LUCKMAIL_PROJECT_CODE)
+    || DEFAULT_LUCKMAIL_PROJECT_CODE;
+  const purchases = await getAllLuckmailPurchases(state, options);
+  return purchases.filter((purchase) => isLuckmailPurchaseForProject(purchase, projectCode));
+}
+
+async function getLuckmailPurchaseById(state, purchaseId, options = {}) {
+  const normalizedPurchaseId = Number(normalizeLuckmailPurchaseId(purchaseId)) || 0;
+  if (!normalizedPurchaseId) {
+    throw new Error('LuckMail 邮箱 ID 无效。');
+  }
+
+  const purchases = await listLuckmailPurchasesByProject(state, options);
+  const purchase = purchases.find((item) => item.id === normalizedPurchaseId) || null;
+  if (!purchase) {
+    throw new Error(`未找到 ID=${normalizedPurchaseId} 的 openai LuckMail 邮箱。`);
+  }
+  return purchase;
+}
+
+async function listLuckmailPurchasesForManagement() {
+  const state = await getState();
+  const purchases = await listLuckmailPurchasesByProject(state, {
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+  return purchases.map((purchase) => buildLuckmailPurchaseView(purchase, state));
+}
+
+async function ensureLuckmailPreserveTag(client, state = null) {
+  const resolvedState = state || await getState();
+  const preserveTagInfo = getLuckmailPreserveTagInfo(resolvedState);
+  if (preserveTagInfo.id > 0) {
+    return preserveTagInfo;
+  }
+
+  const tags = normalizeLuckmailTags(await client.user.getTags());
+  let preserveTag = tags.find(
+    (tag) => normalizeLuckmailProjectName(tag.name) === normalizeLuckmailProjectName(preserveTagInfo.name)
+  ) || null;
+
+  if (!preserveTag) {
+    preserveTag = await client.user.createTag(
+      DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+      0,
+      '保留邮箱（不参与自动复用）'
+    );
+  }
+
+  await setLuckmailPreserveTagInfo(preserveTag);
+  return {
+    id: Number(preserveTag?.id) || 0,
+    name: String(preserveTag?.name || '').trim() || DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
+  };
+}
+
+async function activateLuckmailPurchaseForFlow(state, client, purchase, options = {}) {
+  const normalizedPurchase = normalizeLuckmailPurchase(purchase);
+  if (!normalizedPurchase?.email_address || !normalizedPurchase?.token) {
+    throw new Error('LuckMail 邮箱缺少 email/token，无法用于当前流程。');
+  }
+
+  let baselineCursor = null;
+  if (options.initializeCursor !== false) {
+    const mailList = await client.user.getTokenMails(normalizedPurchase.token);
+    baselineCursor = buildLuckmailBaselineCursor(mailList?.mails || []);
+  }
+
+  await setLuckmailPurchaseState(normalizedPurchase);
+  await setLuckmailMailCursorState(baselineCursor);
+  await setEmailState(normalizedPurchase.email_address);
+
+  if (options.logMessage) {
+    await addLog(options.logMessage, options.logLevel || 'ok');
+  }
+
+  return normalizedPurchase;
+}
+
+async function findReusableLuckmailPurchaseForFlow(state, client) {
+  const preserveTagInfo = getLuckmailPreserveTagInfo(state);
+  const reusablePurchases = filterReusableLuckmailPurchases(
+    await listLuckmailPurchasesByProject(state, {
+      client,
+      projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+    }),
+    {
+      projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+      usedPurchases: getLuckmailUsedPurchases(state),
+      preserveTagId: preserveTagInfo.id,
+      preserveTagName: preserveTagInfo.name,
+      now: Date.now(),
+    }
+  );
+
+  for (const candidate of reusablePurchases) {
+    try {
+      const aliveResult = await client.user.checkTokenAlive(candidate.token);
+      if (!aliveResult?.alive) {
+        await addLog(
+          `LuckMail：跳过不可复用邮箱 ${candidate.email_address}：${aliveResult?.message || aliveResult?.status || 'token 不可用'}`,
+          'warn'
+        );
+        continue;
+      }
+      return candidate;
+    } catch (err) {
+      await addLog(`LuckMail：检测复用邮箱 ${candidate.email_address} 失败：${err.message}`, 'warn');
+    }
+  }
+
+  return null;
+}
+
+async function selectLuckmailPurchase(purchaseId) {
+  const state = await ensureManualInteractionAllowed('切换 LuckMail 邮箱');
+  const client = createLuckmailClient(state);
+  const purchase = await getLuckmailPurchaseById(state, purchaseId, {
+    client,
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+
+  if (purchase.user_disabled === 1) {
+    throw new Error(`LuckMail 邮箱 ${purchase.email_address} 已禁用，无法使用。`);
+  }
+
+  const aliveResult = await client.user.checkTokenAlive(purchase.token);
+  if (!aliveResult?.alive) {
+    throw new Error(`LuckMail 邮箱 ${purchase.email_address} 当前不可用：${aliveResult?.message || aliveResult?.status || 'token 已失效'}`);
+  }
+
+  const activatedPurchase = await activateLuckmailPurchaseForFlow(state, client, purchase, {
+    initializeCursor: true,
+    logMessage: `LuckMail：已切换当前邮箱为 ${purchase.email_address}`,
+  });
+  const nextState = await getState();
+  return buildLuckmailPurchaseView(activatedPurchase, nextState);
+}
+
+async function setLuckmailPurchasePreservedState(purchaseId, preserved) {
+  const state = await ensureManualInteractionAllowed('设置 LuckMail 邮箱保留状态');
+  const client = createLuckmailClient(state);
+  const purchase = await getLuckmailPurchaseById(state, purchaseId, {
+    client,
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+
+  if (preserved) {
+    const preserveTag = await ensureLuckmailPreserveTag(client, state);
+    await client.user.setPurchaseTag(purchase.id, { tagId: preserveTag.id });
+  } else {
+    await client.user.setPurchaseTag(purchase.id, { tagId: 0 });
+  }
+
+  await addLog(`LuckMail：已将 ${purchase.email_address} ${preserved ? '设为保留' : '取消保留'}`, 'ok');
+  const refreshedState = await getState();
+  const refreshedPurchase = await getLuckmailPurchaseById(refreshedState, purchase.id, {
+    client,
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+  return buildLuckmailPurchaseView(refreshedPurchase, await getState());
+}
+
+async function setLuckmailPurchaseDisabledState(purchaseId, disabled) {
+  const state = await ensureManualInteractionAllowed(disabled ? '禁用 LuckMail 邮箱' : '启用 LuckMail 邮箱');
+  const client = createLuckmailClient(state);
+  const purchase = await getLuckmailPurchaseById(state, purchaseId, {
+    client,
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+
+  await client.user.setPurchaseDisabled(purchase.id, disabled ? 1 : 0);
+
+  const currentPurchase = getCurrentLuckmailPurchase(await getState());
+  if (disabled && currentPurchase?.id === purchase.id) {
+    await clearLuckmailRuntimeState({ clearEmail: isLuckmailProvider(await getState()) });
+  }
+
+  await addLog(`LuckMail：已将 ${purchase.email_address} ${disabled ? '禁用' : '启用'}`, 'ok');
+  const refreshedState = await getState();
+  const refreshedPurchase = await getLuckmailPurchaseById(refreshedState, purchase.id, {
+    client,
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+  return buildLuckmailPurchaseView(refreshedPurchase, await getState());
+}
+
+async function batchUpdateLuckmailPurchases(input = {}) {
+  const action = String(input.action || '').trim();
+  const selectedIds = Array.isArray(input.ids)
+    ? [...new Set(input.ids.map((id) => Number(normalizeLuckmailPurchaseId(id)) || 0).filter((id) => id > 0))]
+    : [];
+  if (!selectedIds.length) {
+    throw new Error('请先选择至少一个 LuckMail 邮箱。');
+  }
+
+  const state = await ensureManualInteractionAllowed('批量更新 LuckMail 邮箱');
+  const client = createLuckmailClient(state);
+  const purchases = await listLuckmailPurchasesByProject(state, {
+    client,
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+  const purchaseMap = new Map(purchases.map((purchase) => [purchase.id, purchase]));
+  const targetPurchases = selectedIds.map((id) => purchaseMap.get(id)).filter(Boolean);
+
+  if (!targetPurchases.length) {
+    throw new Error('未找到可批量处理的 openai LuckMail 邮箱。');
+  }
+
+  const targetIds = targetPurchases.map((purchase) => purchase.id);
+
+  if (action === 'used' || action === 'unused') {
+    const nextUsedState = getLuckmailUsedPurchases(state);
+    targetIds.forEach((id) => {
+      const key = normalizeLuckmailPurchaseId(id);
+      if (!key) return;
+      if (action === 'used') {
+        nextUsedState[key] = true;
+      } else {
+        delete nextUsedState[key];
+      }
+    });
+    await setLuckmailUsedPurchasesState(nextUsedState);
+    await addLog(`LuckMail：已批量${action === 'used' ? '标记已用' : '标记未用'} ${targetIds.length} 个邮箱`, 'ok');
+  } else if (action === 'preserve' || action === 'unpreserve') {
+    if (action === 'preserve') {
+      const preserveTag = await ensureLuckmailPreserveTag(client, state);
+      await client.user.batchSetPurchaseTag(targetIds, { tagId: preserveTag.id });
+    } else {
+      await client.user.batchSetPurchaseTag(targetIds, { tagId: 0 });
+    }
+    await addLog(`LuckMail：已批量${action === 'preserve' ? '保留' : '取消保留'} ${targetIds.length} 个邮箱`, 'ok');
+  } else if (action === 'disable' || action === 'enable') {
+    await client.user.batchSetPurchaseDisabled(targetIds, action === 'disable' ? 1 : 0);
+    const currentPurchase = getCurrentLuckmailPurchase(await getState());
+    if (action === 'disable' && currentPurchase?.id && targetIds.includes(currentPurchase.id)) {
+      await clearLuckmailRuntimeState({ clearEmail: isLuckmailProvider(await getState()) });
+    }
+    await addLog(`LuckMail：已批量${action === 'disable' ? '禁用' : '启用'} ${targetIds.length} 个邮箱`, 'ok');
+  } else {
+    throw new Error(`不支持的 LuckMail 批量操作：${action}`);
+  }
+
+  return {
+    updatedIds: targetIds,
+  };
+}
+
+async function disableUsedLuckmailPurchases() {
+  const state = await ensureManualInteractionAllowed('禁用已用 LuckMail 邮箱');
+  const usedPurchases = getLuckmailUsedPurchases(state);
+  const preserveTagInfo = getLuckmailPreserveTagInfo(state);
+  const client = createLuckmailClient(state);
+  const purchases = await listLuckmailPurchasesByProject(state, {
+    client,
+    projectCode: DEFAULT_LUCKMAIL_PROJECT_CODE,
+  });
+  const targets = purchases.filter((purchase) => {
+    const purchaseId = normalizeLuckmailPurchaseId(purchase.id);
+    return Boolean(purchaseId && usedPurchases[purchaseId])
+      && !isLuckmailPurchasePreserved(purchase, {
+        preserveTagId: preserveTagInfo.id,
+        preserveTagName: preserveTagInfo.name,
+      })
+      && purchase.user_disabled !== 1;
+  });
+
+  if (!targets.length) {
+    return { disabledIds: [] };
+  }
+
+  const targetIds = targets.map((purchase) => purchase.id);
+  await client.user.batchSetPurchaseDisabled(targetIds, 1);
+  const currentPurchase = getCurrentLuckmailPurchase(await getState());
+  if (currentPurchase?.id && targetIds.includes(currentPurchase.id)) {
+    await clearLuckmailRuntimeState({ clearEmail: isLuckmailProvider(await getState()) });
+  }
+  await addLog(`LuckMail：已禁用 ${targetIds.length} 个本地已用邮箱`, 'ok');
+  return { disabledIds: targetIds };
+}
+
+async function ensureLuckmailPurchaseForFlow(options = {}) {
+  const { allowReuse = true } = options;
+  const state = await getState();
+  const existingPurchase = getCurrentLuckmailPurchase(state);
+  if (allowReuse && existingPurchase?.email_address && existingPurchase?.token) {
+    if (state.email !== existingPurchase.email_address) {
+      await setEmailState(existingPurchase.email_address);
+    }
+    return existingPurchase;
+  }
+
+  const config = getLuckmailSessionConfig(state);
+  const client = createLuckmailClient(state);
+  if (allowReuse) {
+    const reusablePurchase = await findReusableLuckmailPurchaseForFlow(state, client);
+    if (reusablePurchase) {
+      return activateLuckmailPurchaseForFlow(state, client, reusablePurchase, {
+        initializeCursor: true,
+        logMessage: `LuckMail：已复用 openai 邮箱 ${reusablePurchase.email_address}`,
+      });
+    }
+  }
+
+  const result = await client.user.purchaseEmails(DEFAULT_LUCKMAIL_PROJECT_CODE, 1, {
+    emailType: config.emailType,
+    domain: config.domain || undefined,
+  });
+  const purchases = normalizeLuckmailPurchases(result);
+  const purchase = purchases[0] || null;
+  if (!purchase?.email_address || !purchase?.token) {
+    throw new Error('LuckMail 购邮成功，但未返回可用邮箱或 token。');
+  }
+
+  return activateLuckmailPurchaseForFlow(state, client, purchase, {
+    initializeCursor: false,
+    logMessage: `LuckMail：已购买邮箱 ${purchase.email_address}（类型：${config.emailType}，项目：${DEFAULT_LUCKMAIL_PROJECT_CODE}）`,
+  });
+}
+
+async function resolveLuckmailVerificationMail(client, token, filters = {}, tokenCodeResult = null) {
+  const tokenCode = tokenCodeResult ? normalizeLuckmailTokenCode(tokenCodeResult) : null;
+  if (tokenCode?.mail) {
+    const tokenMail = tokenCode.verification_code && !tokenCode.mail.verification_code
+      ? {
+        ...tokenCode.mail,
+        verification_code: tokenCode.verification_code,
+      }
+      : tokenCode.mail;
+    const inlineMatch = pickLuckmailVerificationMail([tokenMail], filters);
+    if (inlineMatch) {
+      return inlineMatch;
+    }
+  }
+
+  const mailList = await client.user.getTokenMails(token);
+  let match = pickLuckmailVerificationMail(mailList.mails, filters);
+  if (match?.mail?.message_id && !match.mail.verification_code) {
+    const detail = await client.user.getTokenMailDetail(token, match.mail.message_id);
+    match = pickLuckmailVerificationMail([detail], filters);
+  }
+  return match || null;
+}
+
+async function pollLuckmailVerificationCode(step, state, pollPayload = {}) {
+  const purchase = getCurrentLuckmailPurchase(state);
+  if (!purchase?.token) {
+    throw new Error('LuckMail 当前没有可用 token，请先执行步骤 3 购买邮箱。');
+  }
+
+  const client = createLuckmailClient(state);
+  const maxAttempts = Math.max(1, Number(pollPayload.maxAttempts) || 5);
+  const intervalMs = Math.max(1000, Number(pollPayload.intervalMs) || 3000);
+  const filters = {
+    afterTimestamp: pollPayload.filterAfterTimestamp || 0,
+    senderFilters: pollPayload.senderFilters || [],
+    subjectFilters: pollPayload.subjectFilters || [],
+    excludeCodes: pollPayload.excludeCodes || [],
+  };
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    throwIfStopped();
+    await addLog(`步骤 ${step}：正在通过 LuckMail 轮询验证码（${attempt}/${maxAttempts}）...`, 'info');
+
+    try {
+      const tokenCode = await client.user.getTokenCode(purchase.token);
+      const cursor = normalizeLuckmailMailCursor((await getState()).currentLuckmailMailCursor);
+      if (tokenCode.verification_code && tokenCode.mail && !isLuckmailMailNewerThanCursor(tokenCode.mail, cursor)) {
+        throw new Error(`步骤 ${step}：LuckMail 返回的最新邮件仍是旧验证码。`);
+      }
+
+      let match = null;
+      if (tokenCode.has_new_mail || tokenCode.verification_code) {
+        match = await resolveLuckmailVerificationMail(client, purchase.token, filters, tokenCode);
+      }
+      if (!match) {
+        match = await resolveLuckmailVerificationMail(client, purchase.token, filters, null);
+      }
+
+      if (match?.mail) {
+        const cursor = normalizeLuckmailMailCursor((await getState()).currentLuckmailMailCursor);
+        if (!isLuckmailMailNewerThanCursor(match.mail, cursor)) {
+          throw new Error(`步骤 ${step}：LuckMail 命中的邮件不是新邮件。`);
+        }
+
+        await setLuckmailMailCursorState(buildLuckmailMailCursor(match.mail));
+        return {
+          ok: true,
+          code: match.code,
+          emailTimestamp: normalizeLuckmailTimestamp(match.mail.received_at) || Date.now(),
+          mailId: match.mail.message_id,
+        };
+      }
+
+      lastError = new Error(`步骤 ${step}：暂未在 LuckMail 邮箱中找到新的匹配验证码。`);
+    } catch (err) {
+      if (isStopError(err)) {
+        throw err;
+      }
+      lastError = err;
+      await addLog(`步骤 ${step}：LuckMail 轮询失败：${err.message}`, 'warn');
+    }
+
+    if (attempt < maxAttempts) {
+      await sleepWithStop(intervalMs);
+    }
+  }
+
+  throw lastError || new Error(`步骤 ${step}：未在 LuckMail 邮箱中找到新的匹配验证码。`);
 }
 
 // ============================================================
@@ -2124,6 +3005,7 @@ function getSourceLabel(source) {
     'inbucket-mail': 'Inbucket 邮箱',
     'duck-mail': 'Duck 邮箱',
     'hotmail-api': 'Hotmail（远程/本地）',
+    'luckmail-api': 'LuckMail（API 购邮）',
   };
   return labels[source] || source || '未知来源';
 }
@@ -2946,8 +3828,12 @@ async function handleMessage(message, sender) {
 
     case 'SAVE_SETTING': {
       const updates = buildPersistentSettingsPayload(message.payload || {});
+      const sessionUpdates = buildLuckmailSessionSettingsPayload(message.payload || {});
       await setPersistentSettings(updates);
-      await setState(updates);
+      await setState({
+        ...updates,
+        ...sessionUpdates,
+      });
       return { ok: true, state: await getState() };
     }
 
@@ -3014,6 +3900,41 @@ async function handleMessage(message, sender) {
 
     case 'TEST_HOTMAIL_ACCOUNT': {
       const result = await testHotmailAccountMailAccess(String(message.payload?.accountId || ''));
+      return { ok: true, ...result };
+    }
+
+    case 'LIST_LUCKMAIL_PURCHASES': {
+      const purchases = await listLuckmailPurchasesForManagement();
+      return { ok: true, purchases };
+    }
+
+    case 'SELECT_LUCKMAIL_PURCHASE': {
+      const purchase = await selectLuckmailPurchase(message.payload?.purchaseId);
+      return { ok: true, purchase };
+    }
+
+    case 'SET_LUCKMAIL_PURCHASE_USED_STATE': {
+      const result = await setLuckmailPurchaseUsedState(message.payload?.purchaseId, Boolean(message.payload?.used));
+      return { ok: true, ...result };
+    }
+
+    case 'SET_LUCKMAIL_PURCHASE_PRESERVED_STATE': {
+      const purchase = await setLuckmailPurchasePreservedState(message.payload?.purchaseId, Boolean(message.payload?.preserved));
+      return { ok: true, purchase };
+    }
+
+    case 'SET_LUCKMAIL_PURCHASE_DISABLED_STATE': {
+      const purchase = await setLuckmailPurchaseDisabledState(message.payload?.purchaseId, Boolean(message.payload?.disabled));
+      return { ok: true, purchase };
+    }
+
+    case 'BATCH_UPDATE_LUCKMAIL_PURCHASES': {
+      const result = await batchUpdateLuckmailPurchases(message.payload || {});
+      return { ok: true, ...result };
+    }
+
+    case 'DISABLE_USED_LUCKMAIL_PURCHASES': {
+      const result = await disableUsedLuckmailPurchases();
       return { ok: true, ...result };
     }
 
@@ -3138,6 +4059,15 @@ async function handleStepData(step, payload) {
           lastUsedAt: Date.now(),
         });
         await addLog('当前 Hotmail 账号已自动标记为已用。', 'ok');
+      }
+      if (isLuckmailProvider(latestState)) {
+        const currentPurchase = getCurrentLuckmailPurchase(latestState);
+        if (currentPurchase?.id) {
+          await setLuckmailPurchaseUsedState(currentPurchase.id, true);
+          await addLog(`当前 LuckMail 邮箱 ${currentPurchase.email_address} 已在本地标记为已用。`, 'ok');
+        }
+        await clearLuckmailRuntimeState({ clearEmail: true });
+        await addLog('当前 LuckMail 邮箱运行态已清空，下轮将优先复用未用邮箱或重新购买邮箱。', 'ok');
       }
       const localhostPrefix = buildLocalhostCleanupPrefix(payload.localhostUrl);
       if (localhostPrefix) {
@@ -3562,6 +4492,12 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     });
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 Hotmail 账号 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
     return account.email;
+  }
+
+  if (isLuckmailProvider(currentState)) {
+    const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：LuckMail 邮箱已就绪：${purchase.email_address}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return purchase.email_address;
   }
 
   if (isGeneratedAliasProvider(currentState.mailProvider)) {
@@ -4690,6 +5626,9 @@ async function executeStep3(state) {
       preferredAccountId: state.currentHotmailAccountId || null,
     });
     resolvedEmail = account.email;
+  } else if (isLuckmailProvider(state)) {
+    const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
+    resolvedEmail = purchase.email_address;
   } else if (isGeneratedAliasProvider(state.mailProvider)) {
     resolvedEmail = buildGeneratedAliasEmail(state);
   }
@@ -4731,6 +5670,9 @@ function getMailConfig(state) {
   }
   if (provider === HOTMAIL_PROVIDER) {
     return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（远程/本地）' };
+  }
+  if (provider === LUCKMAIL_PROVIDER) {
+    return { provider: LUCKMAIL_PROVIDER, label: 'LuckMail（API 购邮）' };
   }
   if (provider === '163') {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 邮箱' };
@@ -4893,6 +5835,12 @@ async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) 
     return pollHotmailVerificationCode(step, state, {
       ...getVerificationPollPayload(step, state),
       ...hotmailPollConfig,
+      ...pollOverrides,
+    });
+  }
+  if (mail.provider === LUCKMAIL_PROVIDER) {
+    return pollLuckmailVerificationCode(step, state, {
+      ...getVerificationPollPayload(step, state),
       ...pollOverrides,
     });
   }
@@ -5111,7 +6059,7 @@ async function executeStep4(state) {
   }
 
   throwIfStopped();
-  if (mail.provider === HOTMAIL_PROVIDER) {
+  if (mail.provider === HOTMAIL_PROVIDER || mail.provider === LUCKMAIL_PROVIDER) {
     await addLog(`步骤 4：正在通过 ${mail.label} 轮询验证码...`);
   } else {
     await addLog(`步骤 4：正在打开${mail.label}...`);
@@ -5246,7 +6194,7 @@ async function runStep7Attempt(state) {
   }
 
   throwIfStopped();
-  if (mail.provider === HOTMAIL_PROVIDER) {
+  if (mail.provider === HOTMAIL_PROVIDER || mail.provider === LUCKMAIL_PROVIDER) {
     await addLog(`步骤 7：正在通过 ${mail.label} 轮询验证码...`);
   } else {
     await addLog(`步骤 7：正在打开${mail.label}...`);
