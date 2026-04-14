@@ -48,6 +48,7 @@ const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
 const DEFAULT_HOTMAIL_LOCAL_BASE_URL = 'http://127.0.0.1:17373';
 const HOTMAIL_LOCAL_HELPER_TIMEOUT_MS = 45000;
+const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 
 initializeSessionStorageAccess();
 
@@ -2328,6 +2329,7 @@ async function invalidateDownstreamAfterStepRestart(step, options = {}) {
 
 function clearStopRequest() {
   stopRequested = false;
+  autoRunCountdownSkipRequested = false;
 }
 
 function getRunningSteps(statuses = {}) {
@@ -2424,6 +2426,7 @@ function isAutoRunScheduledState(state) {
 function formatAutoRunScheduleTime(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', {
     hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -2767,6 +2770,7 @@ async function broadcastStopToContentScripts() {
 }
 
 let stopRequested = false;
+let autoRunCountdownSkipRequested = false;
 
 // ============================================================
 // Message Handler (central router)
@@ -2903,6 +2907,15 @@ async function handleMessage(message, sender) {
       const cancelled = await cancelScheduledAutoRun();
       if (!cancelled) {
         throw new Error('当前没有可取消的倒计时计划。');
+      }
+      return { ok: true };
+    }
+
+    case 'SKIP_AUTO_RUN_COUNTDOWN': {
+      clearStopRequest();
+      const skipped = await skipAutoRunCountdown();
+      if (!skipped) {
+        throw new Error('当前没有可立即开始的倒计时。');
       }
       return { ok: true };
     }
@@ -4067,11 +4080,52 @@ async function sleepWithAutoRunCountdown(waitMs, payload = {}) {
     return;
   }
 
-  await broadcastAutoRunStatus('waiting_interval', {
+  autoRunCountdownSkipRequested = false;
+  const countdownPayload = {
     ...payload,
     countdownAt: Date.now() + waitMs,
+  };
+  await broadcastAutoRunStatus('waiting_interval', countdownPayload);
+
+  const start = Date.now();
+  try {
+    while (Date.now() - start < waitMs) {
+      throwIfStopped();
+      if (autoRunCountdownSkipRequested) {
+        autoRunCountdownSkipRequested = false;
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, waitMs - (Date.now() - start))));
+    }
+  } finally {
+    if (!stopRequested) {
+      await broadcastAutoRunStatus('waiting_interval', {
+        ...payload,
+        countdownAt: null,
+        countdownTitle: '',
+        countdownNote: '',
+      });
+    }
+  }
+}
+
+async function skipAutoRunCountdown() {
+  const state = await getState();
+  if (!autoRunActive || state.autoRunPhase !== 'waiting_interval') {
+    return false;
+  }
+
+  autoRunCountdownSkipRequested = true;
+  await addLog('已手动跳过当前倒计时，自动流程将立即继续。', 'info');
+  await broadcastAutoRunStatus('waiting_interval', {
+    currentRun: state.autoRunCurrentRun,
+    totalRuns: state.autoRunTotalRuns,
+    attemptRun: state.autoRunAttemptRun,
+    countdownAt: null,
+    countdownTitle: '',
+    countdownNote: '',
   });
-  await sleepWithStop(waitMs);
+  return true;
 }
 
 async function waitBetweenAutoRunRounds(targetRun, totalRuns, roundSummary) {

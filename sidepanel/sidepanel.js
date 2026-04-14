@@ -145,6 +145,7 @@ const AUTO_RUN_FALLBACK_RISK_WARNING_MIN_RUNS = 15;
 const AUTO_RUN_FALLBACK_RISK_RECOMMENDED_THREAD_INTERVAL_MINUTES = 5;
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
+const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 
 let latestState = null;
 let currentAutoRun = {
@@ -183,6 +184,8 @@ const getHotmailBulkActionLabel = window.HotmailUtils?.getHotmailBulkActionLabel
 const getHotmailListToggleLabel = window.HotmailUtils?.getHotmailListToggleLabel;
 const HOTMAIL_LIST_EXPANDED_STORAGE_KEY = 'multipage-hotmail-list-expanded';
 const sidepanelUpdateService = window.SidepanelUpdateService;
+
+btnAutoCancelSchedule?.remove();
 const MAIL_PROVIDER_LOGIN_CONFIGS = {
   '163': {
     label: '163 邮箱',
@@ -745,6 +748,7 @@ function formatCountdown(remainingMs) {
 function formatScheduleTime(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', {
     hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -793,6 +797,13 @@ function renderScheduledAutoRunInfo() {
 
   const remainingMs = countdown.at - Date.now();
   autoScheduleBar.style.display = 'flex';
+  if (btnAutoRunNow) {
+    btnAutoRunNow.hidden = false;
+    btnAutoRunNow.textContent = currentAutoRun.phase === 'waiting_interval' ? '立即继续' : '立即开始';
+  }
+  if (btnAutoCancelSchedule) {
+    btnAutoCancelSchedule.hidden = true;
+  }
   autoScheduleTitle.textContent = countdown.title;
   autoScheduleMeta.textContent = remainingMs > 0
     ? `${countdown.note ? `${countdown.note}，` : ''}剩余 ${formatCountdown(remainingMs)}`
@@ -1707,7 +1718,10 @@ function formatDateTime(timestamp) {
   if (!Number.isFinite(value) || value <= 0) {
     return '未使用';
   }
-  return new Date(value).toLocaleString('zh-CN', { hour12: false });
+  return new Date(value).toLocaleString('zh-CN', {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
+  });
 }
 
 function getHotmailAvailabilityLabel(account) {
@@ -2067,7 +2081,10 @@ function updateStatusDisplay(state) {
 }
 
 function appendLog(entry) {
-  const time = new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour12: false });
+  const time = new Date(entry.timestamp).toLocaleTimeString('zh-CN', {
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE,
+  });
   const levelLabel = LOG_LEVEL_LABELS[entry.level] || entry.level;
   const line = document.createElement('div');
   line.className = `log-line log-${entry.level}`;
@@ -2850,7 +2867,15 @@ btnAutoContinue.addEventListener('click', async () => {
 btnAutoRunNow?.addEventListener('click', async () => {
   try {
     btnAutoRunNow.disabled = true;
-    await chrome.runtime.sendMessage({ type: 'START_SCHEDULED_AUTO_RUN_NOW', source: 'sidepanel', payload: {} });
+    const waitingInterval = currentAutoRun.phase === 'waiting_interval';
+    await chrome.runtime.sendMessage({
+      type: waitingInterval ? 'SKIP_AUTO_RUN_COUNTDOWN' : 'START_SCHEDULED_AUTO_RUN_NOW',
+      source: 'sidepanel',
+      payload: {},
+    });
+    if (waitingInterval) {
+      showToast('已跳过当前倒计时，自动流程将立即继续。', 'info', 1800);
+    }
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
