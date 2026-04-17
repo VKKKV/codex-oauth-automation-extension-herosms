@@ -46,6 +46,7 @@
       "js": [
         "content/activation-utils.js",
         "content/utils.js",
+        "content/auth-page-recovery.js",
         "content/signup-page.js"
       ],
       "run_at": "document_idle"

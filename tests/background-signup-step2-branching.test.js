@@ -171,3 +171,45 @@ test('signup flow helper reuses existing managed alias email when it is still co
   assert.equal(buildCalls, 0);
   assert.equal(setEmailCalls, 0);
 });
+
+test('signup flow helper finalizes step 3 submit by reusing signup verification preparation', async () => {
+  let ensureCalls = 0;
+  const messages = [];
+
+  const helpers = signupFlowApi.createSignupFlowHelpers({
+    buildGeneratedAliasEmail: () => '',
+    chrome: { tabs: { get: async () => ({ id: 31, url: 'https://auth.openai.com/create-account/password' }) } },
+    ensureContentScriptReadyOnTab: async (...args) => {
+      ensureCalls += 1;
+      messages.push({ type: 'ensure', args });
+    },
+    ensureHotmailAccountForFlow: async () => ({}),
+    ensureLuckmailPurchaseForFlow: async () => ({}),
+    isGeneratedAliasProvider: () => false,
+    isReusableGeneratedAliasEmail: () => false,
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    isSignupEmailVerificationPageUrl: () => false,
+    isSignupPasswordPageUrl: () => true,
+    reuseOrCreateTab: async () => 31,
+    sendToContentScriptResilient: async (_source, message) => {
+      messages.push({ type: 'send', message });
+      return { ready: true, retried: 1 };
+    },
+    setEmailState: async () => {},
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com/',
+    SIGNUP_PAGE_INJECT_FILES: ['content/utils.js', 'content/signup-page.js'],
+    waitForTabUrlMatch: async () => null,
+  });
+
+  const result = await helpers.finalizeSignupPasswordSubmitInTab(31, 'Secret123!', 3);
+
+  assert.deepStrictEqual(result, { ready: true, retried: 1 });
+  assert.equal(ensureCalls, 1);
+  assert.deepStrictEqual(messages.find((item) => item.type === 'send')?.message, {
+    type: 'PREPARE_SIGNUP_VERIFICATION',
+    step: 3,
+    source: 'background',
+    payload: { password: 'Secret123!' },
+  });
+});

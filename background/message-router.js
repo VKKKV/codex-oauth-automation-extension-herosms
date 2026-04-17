@@ -28,6 +28,7 @@
       executeStepViaCompletionSignal,
       exportSettingsBundle,
       fetchGeneratedEmail,
+      finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
       findHotmailAccount,
       flushCommand,
@@ -218,6 +219,19 @@
             notifyStepError(message.step, '流程已被用户停止。');
             return { ok: true };
           }
+          try {
+            if (message.step === 3 && typeof finalizeStep3Completion === 'function') {
+              await finalizeStep3Completion(message.payload || {});
+            }
+          } catch (error) {
+            const errorMessage = error?.message || String(error || '步骤 3 提交后确认失败');
+            await setStepStatus(message.step, 'failed');
+            await addLog(`步骤 ${message.step} 失败：${errorMessage}`, 'error');
+            await appendManualAccountRunRecordIfNeeded(`step${message.step}_failed`, null, errorMessage);
+            notifyStepError(message.step, errorMessage);
+            return { ok: true, error: errorMessage };
+          }
+
           const completionState = message.step === 9 ? await getState() : null;
           await setStepStatus(message.step, 'completed');
           await addLog(`步骤 ${message.step} 已完成`, 'ok');

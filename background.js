@@ -5465,7 +5465,7 @@ async function resumeAutoRun() {
 // ============================================================
 
 const SIGNUP_ENTRY_URL = 'https://chatgpt.com/';
-const SIGNUP_PAGE_INJECT_FILES = ['content/utils.js', 'content/signup-page.js'];
+const SIGNUP_PAGE_INJECT_FILES = ['content/utils.js', 'content/auth-page-recovery.js', 'content/signup-page.js'];
 const panelBridge = self.MultiPageBackgroundPanelBridge?.createPanelBridge({
   chrome,
   addLog,
@@ -5684,6 +5684,15 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   executeStepViaCompletionSignal,
   exportSettingsBundle,
   fetchGeneratedEmail,
+  finalizeStep3Completion: async () => {
+    const currentState = await getState();
+    const signupTabId = await getTabId('signup-page');
+    return signupFlowHelpers.finalizeSignupPasswordSubmitInTab(
+      signupTabId,
+      currentState.password || currentState.customPassword || '',
+      3
+    );
+  },
   finalizeIcloudAliasAfterSuccessfulFlow,
   findHotmailAccount,
   flushCommand,
@@ -6308,6 +6317,7 @@ async function getStep8PageState(tabId, responseTimeoutMs = 1500) {
 async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS) {
   const start = Date.now();
   let recovered = false;
+  let retryRecovered = false;
 
   while (Date.now() - start < timeoutMs) {
     throwIfStopped();
@@ -6315,7 +6325,21 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     if (pageState?.addPhonePage) {
       throw new Error('步骤 8：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。');
     }
+    if (pageState?.retryPage) {
+      await recoverAuthRetryPageOnTab(tabId, {
+        flow: 'auth',
+        logLabel: '步骤 8：检测到认证页重试页，正在点击“重试”恢复',
+        step: 8,
+        timeoutMs: Math.max(5000, Math.min(12000, timeoutMs)),
+      });
+      retryRecovered = true;
+      await sleepWithStop(250);
+      continue;
+    }
     if (pageState?.consentReady) {
+      if (retryRecovered) {
+        await addLog('步骤 8：认证页重试页已恢复，准备重新定位“继续”按钮...', 'info');
+      }
       return pageState;
     }
     if (pageState === null && !recovered) {
@@ -6372,6 +6396,29 @@ async function triggerStep8ContentStrategy(tabId, strategy) {
     timeoutMs: 15000,
     retryDelayMs: 600,
     logMessage: '步骤 8：认证页正在切换，等待“继续”按钮重新就绪...',
+  });
+
+  if (result?.error) {
+    throw new Error(result.error);
+  }
+
+  return result;
+}
+
+async function recoverAuthRetryPageOnTab(tabId, payload = {}, options = {}) {
+  await ensureStep8SignupPageReady(tabId, {
+    timeoutMs: options.readyTimeoutMs ?? 15000,
+    retryDelayMs: options.retryDelayMs ?? 600,
+    logMessage: options.readyLogMessage || '步骤 8：认证页内容脚本已失联，正在恢复后继续处理重试页...',
+  });
+  const result = await sendToContentScriptResilient('signup-page', {
+    type: 'RECOVER_AUTH_RETRY_PAGE',
+    source: 'background',
+    payload,
+  }, {
+    timeoutMs: options.timeoutMs ?? 15000,
+    retryDelayMs: options.retryDelayMs ?? 600,
+    logMessage: options.logMessage || '步骤 8：认证页正在切换，等待“重试”按钮重新就绪...',
   });
 
   if (result?.error) {
@@ -6443,6 +6490,20 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
     if (pageState?.addPhonePage) {
       throw new Error('步骤 8：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
     }
+    if (pageState?.retryPage) {
+      await recoverAuthRetryPageOnTab(tabId, {
+        flow: 'auth',
+        logLabel: '步骤 8：点击“继续”后进入重试页，正在点击“重试”恢复',
+        step: 8,
+        timeoutMs: Math.max(5000, Math.min(12000, timeoutMs)),
+      });
+      return {
+        progressed: false,
+        reason: 'retry_page_recovered',
+        restartCurrentStep: true,
+        url: pageState.url || baselineUrl || '',
+      };
+    }
     if (pageState === null) {
       if (!recovered) {
         recovered = true;
@@ -6457,6 +6518,14 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
     }
     recovered = false;
 
+    if (pageState?.consentPage === false && !pageState?.verificationPage) {
+      return {
+        progressed: true,
+        reason: 'left_consent_page',
+        url: pageState.url || baselineUrl || '',
+      };
+    }
+
     await sleepWithStop(200);
   }
 
@@ -6467,6 +6536,8 @@ function getStep8EffectLabel(effect) {
   switch (effect?.reason) {
     case 'url_changed':
       return `URL 已变化：${effect.url}`;
+    case 'retry_page_recovered':
+      return '页面进入重试页并已恢复，需要重新执行当前步骤';
     case 'page_reloading':
       return '页面正在跳转或重载';
     case 'left_consent_page':

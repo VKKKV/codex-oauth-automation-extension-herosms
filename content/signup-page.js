@@ -19,6 +19,7 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'STEP8_TRIGGER_CONTINUE'
       || message.type === 'GET_LOGIN_AUTH_STATE'
       || message.type === 'PREPARE_SIGNUP_VERIFICATION'
+      || message.type === 'RECOVER_AUTH_RETRY_PAGE'
       || message.type === 'RESEND_VERIFICATION_CODE'
       || message.type === 'ENSURE_SIGNUP_ENTRY_READY'
       || message.type === 'ENSURE_SIGNUP_PASSWORD_PAGE_READY'
@@ -71,6 +72,8 @@ async function handleCommand(message) {
       return serializeLoginAuthState(inspectLoginAuthState());
     case 'PREPARE_SIGNUP_VERIFICATION':
       return await prepareSignupVerificationFlow(message.payload);
+    case 'RECOVER_AUTH_RETRY_PAGE':
+      return await recoverCurrentAuthRetryPage(message.payload);
     case 'RESEND_VERIFICATION_CODE':
       return await resendVerificationCode(message.step);
     case 'ENSURE_SIGNUP_ENTRY_READY':
@@ -626,6 +629,20 @@ const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+
 const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时/i;
 const SIGNUP_EMAIL_EXISTS_PATTERN = /与此电子邮件地址相关联的帐户已存在|account\s+associated\s+with\s+this\s+email\s+address\s+already\s+exists|email\s+address.*already\s+exists/i;
 
+const authPageRecovery = self.MultiPageAuthPageRecovery?.createAuthPageRecovery?.({
+  detailPattern: AUTH_TIMEOUT_ERROR_DETAIL_PATTERN,
+  getActionText,
+  getPageTextSnapshot,
+  humanPause,
+  isActionEnabled,
+  isVisibleElement,
+  log,
+  simulateClick,
+  sleep,
+  throwIfStopped,
+  titlePattern: AUTH_TIMEOUT_ERROR_TITLE_PATTERN,
+}) || null;
+
 function getVerificationErrorText() {
   const messages = [];
   const selectors = [
@@ -863,6 +880,10 @@ function getSignupPasswordSubmitButton({ allowDisabled = false } = {}) {
 }
 
 function getAuthRetryButton({ allowDisabled = false } = {}) {
+  if (authPageRecovery?.getAuthRetryButton) {
+    return authPageRecovery.getAuthRetryButton({ allowDisabled });
+  }
+
   const direct = document.querySelector('button[data-dd-action-name="Try again"]');
   if (direct && isVisibleElement(direct) && (allowDisabled || isActionEnabled(direct))) {
     return direct;
@@ -877,6 +898,10 @@ function getAuthRetryButton({ allowDisabled = false } = {}) {
 }
 
 function getAuthTimeoutErrorPageState(options = {}) {
+  if (authPageRecovery?.getAuthTimeoutErrorPageState) {
+    return authPageRecovery.getAuthTimeoutErrorPageState(options);
+  }
+
   const { pathPatterns = [] } = options;
   const path = location.pathname || '';
   if (pathPatterns.length && !pathPatterns.some((pattern) => pattern.test(path))) {
@@ -905,6 +930,70 @@ function getAuthTimeoutErrorPageState(options = {}) {
     titleMatched,
     detailMatched,
   };
+}
+
+function getAuthRetryPathPatternsForFlow(flow = 'auth') {
+  switch (flow) {
+    case 'signup_password':
+      return [/\/create-account\/password(?:[/?#]|$)/i];
+    case 'login':
+      return [/\/log-in(?:[/?#]|$)/i];
+    default:
+      return [];
+  }
+}
+
+function getCurrentAuthRetryPageState(flow = 'auth') {
+  return getAuthTimeoutErrorPageState({
+    pathPatterns: getAuthRetryPathPatternsForFlow(flow),
+  });
+}
+
+async function recoverCurrentAuthRetryPage(payload = {}) {
+  const {
+    flow = 'auth',
+    logLabel = '',
+    step = null,
+    timeoutMs = 12000,
+    waitAfterClickMs = 1200,
+  } = payload;
+  const pathPatterns = getAuthRetryPathPatternsForFlow(flow);
+  if (authPageRecovery?.recoverAuthRetryPage) {
+    return authPageRecovery.recoverAuthRetryPage({
+      logLabel,
+      pathPatterns,
+      step,
+      timeoutMs,
+      waitAfterClickMs,
+    });
+  }
+
+  const start = Date.now();
+  let clickCount = 0;
+  while (Date.now() - start < timeoutMs) {
+    throwIfStopped();
+    const retryState = getCurrentAuthRetryPageState(flow);
+    if (!retryState) {
+      return {
+        recovered: clickCount > 0,
+        clickCount,
+        url: location.href,
+      };
+    }
+
+    if (retryState.retryButton && retryState.retryEnabled) {
+      clickCount += 1;
+      log(`${logLabel || `步骤 ${step || '?'}：检测到重试页，正在点击“重试”恢复`}（第 ${clickCount} 次）...`, 'warn');
+      await humanPause(300, 800);
+      simulateClick(retryState.retryButton);
+      await sleep(waitAfterClickMs);
+      continue;
+    }
+
+    await sleep(250);
+  }
+
+  throw new Error(`${logLabel || `步骤 ${step || '?'}：重试页恢复`}超时。URL: ${location.href}`);
 }
 
 function getSignupPasswordTimeoutErrorPageState() {
@@ -1121,6 +1210,29 @@ function createStep6RecoverableResult(reason, snapshot, options = {}) {
   };
 }
 
+async function createStep6LoginTimeoutRecoverableResult(reason, snapshot, message) {
+  const resolvedSnapshot = normalizeStep6Snapshot(snapshot || inspectLoginAuthState());
+  if (resolvedSnapshot?.state === 'login_timeout_error_page') {
+    try {
+      const recoveryResult = await recoverCurrentAuthRetryPage({
+        flow: 'login',
+        logLabel: '步骤 6：检测到登录超时报错，正在点击“重试”恢复当前页面',
+        step: 6,
+        timeoutMs: 12000,
+      });
+      if (recoveryResult?.recovered) {
+        log('步骤 6：登录超时报错页已点击“重试”，准备重新执行当前步骤。', 'warn');
+      }
+    } catch (error) {
+      log(`步骤 6：登录超时报错页自动点击“重试”失败：${error.message}`, 'warn');
+    }
+  }
+
+  return createStep6RecoverableResult(reason, resolvedSnapshot, {
+    message,
+  });
+}
+
 function normalizeStep6Snapshot(snapshot) {
   if (snapshot?.state !== 'oauth_consent_page') {
     return snapshot;
@@ -1260,15 +1372,12 @@ async function prepareSignupVerificationFlow(payload = {}, timeout = 30000) {
     recoveryRound += 1;
 
     if (snapshot.state === 'error') {
-      if (snapshot.retryButton && isActionEnabled(snapshot.retryButton)) {
-        log(`步骤 4：检测到密码页超时报错，正在点击“重试”（第 ${recoveryRound}/${maxRecoveryRounds} 次）...`, 'warn');
-        await humanPause(350, 900);
-        simulateClick(snapshot.retryButton);
-        await sleep(1200);
-        continue;
-      }
-
-      log(`步骤 4：检测到异常页，但“重试”按钮暂不可用，准备继续等待（${recoveryRound}/${maxRecoveryRounds}）...`, 'warn');
+      await recoverCurrentAuthRetryPage({
+        flow: 'signup_password',
+        logLabel: `步骤 4：检测到密码页超时报错，正在点击“重试”恢复（第 ${recoveryRound}/${maxRecoveryRounds} 次）`,
+        step: 4,
+        timeoutMs: 12000,
+      });
       continue;
     }
 
@@ -1459,9 +1568,11 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
     if (snapshot.state === 'login_timeout_error_page') {
       return {
         action: 'recoverable',
-        result: createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-          message: '提交邮箱后进入登录超时报错页。',
-        }),
+        result: await createStep6LoginTimeoutRecoverableResult(
+          'login_timeout_error_page',
+          snapshot,
+          '提交邮箱后进入登录超时报错页。'
+        ),
       };
     }
 
@@ -1492,9 +1603,11 @@ async function waitForStep6EmailSubmitTransition(emailSubmittedAt, timeout = 120
   if (snapshot.state === 'login_timeout_error_page') {
     return {
       action: 'recoverable',
-      result: createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-        message: '提交邮箱后进入登录超时报错页。',
-      }),
+      result: await createStep6LoginTimeoutRecoverableResult(
+        'login_timeout_error_page',
+        snapshot,
+        '提交邮箱后进入登录超时报错页。'
+      ),
     };
   }
   if (snapshot.state === 'oauth_consent_page') {
@@ -1533,9 +1646,11 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
     if (snapshot.state === 'login_timeout_error_page') {
       return {
         action: 'recoverable',
-        result: createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-          message: '提交密码后进入登录超时报错页。',
-        }),
+        result: await createStep6LoginTimeoutRecoverableResult(
+          'login_timeout_error_page',
+          snapshot,
+          '提交密码后进入登录超时报错页。'
+        ),
       };
     }
 
@@ -1563,9 +1678,11 @@ async function waitForStep6PasswordSubmitTransition(passwordSubmittedAt, timeout
   if (snapshot.state === 'login_timeout_error_page') {
     return {
       action: 'recoverable',
-      result: createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-        message: '提交密码后进入登录超时报错页。',
-      }),
+      result: await createStep6LoginTimeoutRecoverableResult(
+        'login_timeout_error_page',
+        snapshot,
+        '提交密码后进入登录超时报错页。'
+      ),
     };
   }
   if (snapshot.state === 'oauth_consent_page') {
@@ -1602,9 +1719,11 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
     }
 
     if (snapshot.state === 'login_timeout_error_page') {
-      return createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-        message: '切换到一次性验证码登录后进入登录超时报错页。',
-      });
+      return await createStep6LoginTimeoutRecoverableResult(
+        'login_timeout_error_page',
+        snapshot,
+        '切换到一次性验证码登录后进入登录超时报错页。'
+      );
     }
 
     if (snapshot.state === 'oauth_consent_page') {
@@ -1626,9 +1745,11 @@ async function waitForStep6SwitchTransition(loginVerificationRequestedAt, timeou
     });
   }
   if (snapshot.state === 'login_timeout_error_page') {
-    return createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-      message: '切换到一次性验证码登录后进入登录超时报错页。',
-    });
+    return await createStep6LoginTimeoutRecoverableResult(
+      'login_timeout_error_page',
+      snapshot,
+      '切换到一次性验证码登录后进入登录超时报错页。'
+    );
   }
   if (snapshot.state === 'oauth_consent_page') {
     throw new Error(`切换到一次性验证码登录后页面直接进入 OAuth 授权页，未经过登录验证码页。URL: ${snapshot.url}`);
@@ -1757,9 +1878,11 @@ async function step6_login(payload) {
 
   if (snapshot.state === 'login_timeout_error_page') {
     log('步骤 6：检测到登录超时报错，准备重新执行步骤 6。', 'warn');
-    return createStep6RecoverableResult('login_timeout_error_page', snapshot, {
-      message: '当前页面处于登录超时报错页。',
-    });
+    return await createStep6LoginTimeoutRecoverableResult(
+      'login_timeout_error_page',
+      snapshot,
+      '当前页面处于登录超时报错页。'
+    );
   }
 
   if (snapshot.state === 'email_page') {
@@ -1797,12 +1920,17 @@ async function step8_findAndClick() {
 
 function getStep8State() {
   const continueBtn = getPrimaryContinueButton();
+  const retryState = getCurrentAuthRetryPageState('auth');
   const state = {
     url: location.href,
     consentPage: isOAuthConsentPage(),
     consentReady: isStep8Ready(),
     verificationPage: isVerificationPageStillVisible(),
     addPhonePage: isAddPhonePageReady(),
+    retryPage: Boolean(retryState),
+    retryEnabled: Boolean(retryState?.retryEnabled),
+    retryTitleMatched: Boolean(retryState?.titleMatched),
+    retryDetailMatched: Boolean(retryState?.detailMatched),
     buttonFound: Boolean(continueBtn),
     buttonEnabled: isButtonEnabled(continueBtn),
     buttonText: continueBtn ? getActionText(continueBtn) : '',

@@ -150,6 +150,37 @@
       return result;
     }
 
+    async function finalizeSignupPasswordSubmitInTab(tabId, password = '', step = 3) {
+      if (!Number.isInteger(tabId)) {
+        throw new Error(`认证页面标签页已关闭，无法完成步骤 ${step} 的提交后确认。`);
+      }
+
+      await ensureContentScriptReadyOnTab('signup-page', tabId, {
+        inject: SIGNUP_PAGE_INJECT_FILES,
+        injectSource: 'signup-page',
+        timeoutMs: 45000,
+        retryDelayMs: 900,
+        logMessage: `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`,
+      });
+
+      const result = await sendToContentScriptResilient('signup-page', {
+        type: 'PREPARE_SIGNUP_VERIFICATION',
+        step,
+        source: 'background',
+        payload: { password: password || '' },
+      }, {
+        timeoutMs: 30000,
+        retryDelayMs: 700,
+        logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+      });
+
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+
+      return result || {};
+    }
+
     async function resolveSignupEmailForFlow(state) {
       let resolvedEmail = state.email;
       if (isHotmailProvider(state)) {
@@ -182,6 +213,7 @@
     return {
       ensureSignupEntryPageReady,
       ensureSignupPostEmailPageReadyInTab,
+      finalizeSignupPasswordSubmitInTab,
       ensureSignupPasswordPageReadyInTab,
       openSignupEntryTab,
       resolveSignupEmailForFlow,

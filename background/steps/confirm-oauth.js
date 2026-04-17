@@ -152,6 +152,12 @@
                 break;
               }
 
+              if (effect.restartCurrentStep) {
+                await addLog(`步骤 8：${getStep8EffectLabel(effect)}，准备重新定位“继续”按钮并重试...`, 'warn');
+                await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
+                continue;
+              }
+
               if (round >= STEP8_MAX_ROUNDS) {
                 throw new Error(`步骤 8：连续 ${STEP8_MAX_ROUNDS} 轮点击“继续”后页面仍无反应。`);
               }

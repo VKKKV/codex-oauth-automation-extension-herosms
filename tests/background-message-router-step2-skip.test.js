@@ -11,6 +11,9 @@ function createRouter(overrides = {}) {
     logs: [],
     stepStatuses: [],
     emailStates: [],
+    finalizePayloads: [],
+    notifyCompletions: [],
+    notifyErrors: [],
   };
 
   const router = api.createMessageRouter({
@@ -41,6 +44,9 @@ function createRouter(overrides = {}) {
     executeStepViaCompletionSignal: async () => {},
     exportSettingsBundle: async () => ({}),
     fetchGeneratedEmail: async () => '',
+    finalizeStep3Completion: overrides.finalizeStep3Completion || (async (payload) => {
+      events.finalizePayloads.push(payload);
+    }),
     finalizeIcloudAliasAfterSuccessfulFlow: async () => {},
     findHotmailAccount: async () => null,
     flushCommand: async () => {},
@@ -63,8 +69,12 @@ function createRouter(overrides = {}) {
     normalizeHotmailAccounts: (items) => items,
     normalizeRunCount: (value) => value,
     AUTO_RUN_TIMER_KIND_SCHEDULED_START: 'scheduled',
-    notifyStepComplete: () => {},
-    notifyStepError: () => {},
+    notifyStepComplete: (step, payload) => {
+      events.notifyCompletions.push({ step, payload });
+    },
+    notifyStepError: (step, error) => {
+      events.notifyErrors.push({ step, error });
+    },
     patchHotmailAccount: async () => {},
     registerTab: async () => {},
     requestStop: async () => {},
@@ -124,4 +134,64 @@ test('message router does not overwrite a completed step 3 when step 2 is replay
   });
 
   assert.deepStrictEqual(events.stepStatuses, []);
+});
+
+test('message router finalizes step 3 before marking it completed', async () => {
+  const { router, events } = createRouter();
+
+  const response = await router.handleMessage({
+    type: 'STEP_COMPLETE',
+    step: 3,
+    source: 'signup-page',
+    payload: {
+      email: 'user@example.com',
+      signupVerificationRequestedAt: 123,
+    },
+  }, {});
+
+  assert.deepStrictEqual(events.finalizePayloads, [
+    {
+      email: 'user@example.com',
+      signupVerificationRequestedAt: 123,
+    },
+  ]);
+  assert.deepStrictEqual(events.stepStatuses, [{ step: 3, status: 'completed' }]);
+  assert.deepStrictEqual(events.emailStates, ['user@example.com']);
+  assert.deepStrictEqual(events.notifyCompletions, [
+    {
+      step: 3,
+      payload: {
+        email: 'user@example.com',
+        signupVerificationRequestedAt: 123,
+      },
+    },
+  ]);
+  assert.deepStrictEqual(response, { ok: true });
+});
+
+test('message router marks step 3 failed when post-submit finalize fails', async () => {
+  const { router, events } = createRouter({
+    finalizeStep3Completion: async () => {
+      throw new Error('步骤 3 提交后仍停留在密码页。');
+    },
+  });
+
+  const response = await router.handleMessage({
+    type: 'STEP_COMPLETE',
+    step: 3,
+    source: 'signup-page',
+    payload: {
+      email: 'user@example.com',
+    },
+  }, {});
+
+  assert.deepStrictEqual(events.stepStatuses, [{ step: 3, status: 'failed' }]);
+  assert.deepStrictEqual(events.notifyErrors, [
+    {
+      step: 3,
+      error: '步骤 3 提交后仍停留在密码页。',
+    },
+  ]);
+  assert.equal(events.logs.some(({ message }) => /步骤 3 失败：步骤 3 提交后仍停留在密码页。/.test(message)), true);
+  assert.deepStrictEqual(response, { ok: true, error: '步骤 3 提交后仍停留在密码页。' });
 });
