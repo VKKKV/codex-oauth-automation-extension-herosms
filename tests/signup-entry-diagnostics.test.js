@@ -52,7 +52,8 @@ function extractFunction(name) {
 }
 
 test('signup entry diagnostics summarizes current page inputs and visible actions', () => {
-  const api = new Function(`
+const api = new Function(`
+const SIGNUP_ENTRY_TRIGGER_PATTERN = /免费注册|立即注册|注册|sign\\s*up|register|create\\s*account|create\\s+account/i;
 const location = { href: 'https://chatgpt.com/' };
 const document = {
   title: 'ChatGPT',
@@ -67,6 +68,9 @@ const document = {
           tagName: 'BUTTON',
           textContent: 'Get started',
           disabled: false,
+          getBoundingClientRect() {
+            return { width: 120, height: 40 };
+          },
           getAttribute(name) {
             return name === 'type' ? 'button' : '';
           },
@@ -75,6 +79,9 @@ const document = {
           tagName: 'A',
           textContent: 'Log in',
           disabled: false,
+          getBoundingClientRect() {
+            return { width: 96, height: 40 };
+          },
           getAttribute() {
             return '';
           },
@@ -129,6 +136,8 @@ return {
   assert.equal(result.readyState, 'complete');
   assert.equal(result.hasEmailInput, false);
   assert.equal(result.hasPasswordInput, false);
+  assert.equal(result.bodyContainsSignupText, false);
+  assert.deepStrictEqual(result.signupLikeActions, []);
   assert.deepStrictEqual(result.visibleActions, [
     { tag: 'button', type: 'button', text: 'Get started', enabled: true },
     { tag: 'a', type: '', text: 'Log in', enabled: true },

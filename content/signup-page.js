@@ -369,6 +369,25 @@ function getSignupEntryDiagnostics() {
   const actionCandidates = document.querySelectorAll(
     'a, button, [role="button"], [role="link"], input[type="button"], input[type="submit"]'
   );
+  const allActions = Array.from(actionCandidates).map((el) => {
+    const rect = typeof el?.getBoundingClientRect === 'function'
+      ? el.getBoundingClientRect()
+      : null;
+    const text = getActionText(el);
+    return {
+      tag: (el.tagName || '').toLowerCase(),
+      type: el.getAttribute?.('type') || '',
+      text: text.slice(0, 80),
+      visible: isVisibleElement(el),
+      enabled: isActionEnabled(el),
+      rect: rect
+        ? {
+            width: Math.round(rect.width || 0),
+            height: Math.round(rect.height || 0),
+          }
+        : null,
+    };
+  });
   const visibleActions = Array.from(actionCandidates)
     .filter(isVisibleElement)
     .slice(0, 12)
@@ -379,6 +398,9 @@ function getSignupEntryDiagnostics() {
       enabled: isActionEnabled(el),
     }))
     .filter((item) => item.text);
+  const signupLikeActions = allActions
+    .filter((item) => item.text && SIGNUP_ENTRY_TRIGGER_PATTERN.test(item.text))
+    .slice(0, 12);
 
   return {
     url: location.href,
@@ -386,6 +408,8 @@ function getSignupEntryDiagnostics() {
     readyState: document.readyState || '',
     hasEmailInput: Boolean(getSignupEmailInput()),
     hasPasswordInput: Boolean(getSignupPasswordInput()),
+    bodyContainsSignupText: SIGNUP_ENTRY_TRIGGER_PATTERN.test(getPageTextSnapshot()),
+    signupLikeActions,
     visibleActions,
     bodyTextPreview: getPageTextSnapshot().slice(0, 240),
   };
