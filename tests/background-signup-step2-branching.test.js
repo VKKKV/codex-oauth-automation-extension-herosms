@@ -132,3 +132,42 @@ test('signup flow helper recognizes email verification page as post-email landin
   assert.equal(ensureCalls, 1);
   assert.equal(passwordReadyChecks, 0);
 });
+
+test('signup flow helper reuses existing managed alias email when it is still compatible', async () => {
+  let buildCalls = 0;
+  let setEmailCalls = 0;
+
+  const helpers = signupFlowApi.createSignupFlowHelpers({
+    buildGeneratedAliasEmail: () => {
+      buildCalls += 1;
+      return 'demo+fresh@gmail.com';
+    },
+    chrome: { tabs: { get: async () => ({ id: 21, url: 'https://auth.openai.com/create-account/password' }) } },
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureHotmailAccountForFlow: async () => ({}),
+    ensureLuckmailPurchaseForFlow: async () => ({}),
+    isGeneratedAliasProvider: () => true,
+    isReusableGeneratedAliasEmail: (_state, email) => email === 'demo+saved@gmail.com',
+    isHotmailProvider: () => false,
+    isLuckmailProvider: () => false,
+    isSignupEmailVerificationPageUrl: () => false,
+    isSignupPasswordPageUrl: () => true,
+    reuseOrCreateTab: async () => 21,
+    sendToContentScriptResilient: async () => ({}),
+    setEmailState: async () => {
+      setEmailCalls += 1;
+    },
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com/',
+    SIGNUP_PAGE_INJECT_FILES: [],
+    waitForTabUrlMatch: async () => null,
+  });
+
+  const email = await helpers.resolveSignupEmailForFlow({
+    mailProvider: 'gmail',
+    email: 'demo+saved@gmail.com',
+  });
+
+  assert.equal(email, 'demo+saved@gmail.com');
+  assert.equal(buildCalls, 0);
+  assert.equal(setEmailCalls, 0);
+});

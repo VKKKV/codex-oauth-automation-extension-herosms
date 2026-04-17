@@ -9,6 +9,7 @@
       ensureHotmailAccountForFlow,
       ensureLuckmailPurchaseForFlow,
       isGeneratedAliasProvider,
+      isReusableGeneratedAliasEmail,
       isHotmailProvider,
       isLuckmailProvider,
       isSignupEmailVerificationPageUrl,
@@ -162,7 +163,9 @@
         const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
         resolvedEmail = purchase.email_address;
       } else if (isGeneratedAliasProvider(state)) {
-        resolvedEmail = buildGeneratedAliasEmail(state);
+        if (!isReusableGeneratedAliasEmail?.(state, resolvedEmail)) {
+          resolvedEmail = buildGeneratedAliasEmail(state);
+        }
       }
 
       if (!resolvedEmail) {

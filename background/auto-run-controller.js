@@ -352,6 +352,8 @@
               autoStepDelaySeconds: prevState.autoStepDelaySeconds,
               mailProvider: prevState.mailProvider,
               emailGenerator: prevState.emailGenerator,
+              gmailBaseEmail: prevState.gmailBaseEmail,
+              mail2925BaseEmail: prevState.mail2925BaseEmail,
               emailPrefix: prevState.emailPrefix,
               inbucketHost: prevState.inbucketHost,
               inbucketMailbox: prevState.inbucketMailbox,
