@@ -188,9 +188,10 @@ test('WRONG_MAX_PRICE returns false and does not call setStatus', async () => {
   assert.deepEqual(setStatusCalls, [], 'no setStatus call when getNumber fails (no activation to cancel)');
 });
 
-test('SMS polling timeout triggers resend then cancel=8 and returns false', async () => {
+test('SMS polling timeout (Round 1) throws STEP8_RESTART_STEP7 error and clears activation', async () => {
   const MultiPagePhoneVerifyFlow = loadPhoneVerifyFlow();
   const setStatusCalls = [];
+  const clearCalls = [];
   const fetchImpl = makeFetchScript([
     {
       match: (url) => url.includes('action=getNumber'),
@@ -217,6 +218,7 @@ test('SMS polling timeout triggers resend then cancel=8 and returns false', asyn
     const { deps, sent, logs } = createTestHarness({
       fetchImpl,
       sleepWithStop: async (ms) => { clock += ms; },
+      clearLastActivation: async () => { clearCalls.push(true); },
       loadHeroSmsConfig: async () => ({
         enabled: true,
         apiKey: 'KEY',
@@ -226,78 +228,23 @@ test('SMS polling timeout triggers resend then cancel=8 and returns false', asyn
       }),
     });
     const flow = MultiPagePhoneVerifyFlow.createPhoneVerifyFlow(deps);
-    const result = await flow.run(8, {}, {});
-    assert.equal(result, false);
+    
+    await assert.rejects(
+      () => flow.run(8, {}, {}),
+      (err) => /STEP8_RESTART_STEP7::/.test(err.message) && /首轮.*未收到短信/.test(err.message)
+    );
+
     assert.deepEqual(setStatusCalls, [
       { id: '111', status: '1' },
-      { id: '111', status: '3' },
       { id: '111', status: '8' },
     ]);
     assert.deepEqual(
       sent.map((entry) => entry.type),
-      ['ADD_PHONE_FILL_NUMBER', 'ADD_PHONE_SUBMIT', 'ADD_PHONE_REQUEST_RESEND'],
-      'resend is attempted between polling rounds'
+      ['ADD_PHONE_FILL_NUMBER', 'ADD_PHONE_SUBMIT'],
+      'resend is NOT attempted, instead it restarts'
     );
+    assert.equal(clearCalls.length, 1, 'last activation is cleared to ensure fresh number next time');
     assert.ok(logs.some((entry) => /首轮/.test(entry.message) && /未收到/.test(entry.message)));
-    assert.ok(logs.some((entry) => /HeroSMS 手机验证失败/.test(entry.message)));
-  } finally {
-    Date.now = originalNow;
-  }
-});
-
-test('second poll succeeds after resend yields STATUS_OK', async () => {
-  const MultiPagePhoneVerifyFlow = loadPhoneVerifyFlow();
-  const setStatusCalls = [];
-  let getStatusCount = 0;
-  const fetchImpl = makeFetchScript([
-    {
-      match: (url) => url.includes('action=getNumber'),
-      body: 'ACCESS_NUMBER:555:66911111111',
-    },
-    {
-      match: (url) => url.includes('action=setStatus'),
-      body: (url) => {
-        const params = new URL(url).searchParams;
-        setStatusCalls.push({ id: params.get('id'), status: params.get('status') });
-        return 'ACCESS_ACTIVATION';
-      },
-    },
-    {
-      match: (url) => url.includes('action=getStatus'),
-      body: () => {
-        getStatusCount += 1;
-        if (getStatusCount > 50) return 'STATUS_OK:987654';
-        return 'STATUS_WAIT_CODE';
-      },
-    },
-  ]);
-
-  const originalNow = Date.now;
-  let clock = 0;
-  Date.now = () => clock;
-  try {
-    const { deps, sent, logs } = createTestHarness({
-      fetchImpl,
-      sleepWithStop: async (ms) => { clock += ms; },
-      loadHeroSmsConfig: async () => ({
-        enabled: true,
-        apiKey: 'KEY',
-        country: 52,
-        service: 'ot',
-        maxPrice: 0.05,
-      }),
-    });
-    const flow = MultiPagePhoneVerifyFlow.createPhoneVerifyFlow(deps);
-    const result = await flow.run(8, {}, {});
-    assert.equal(result, true);
-    assert.deepEqual(
-      setStatusCalls.map((c) => c.status),
-      ['1', '3', '6'],
-      'SMS_SENT → REQUEST_RESEND → COMPLETE'
-    );
-    assert.ok(sent.some((entry) => entry.type === 'ADD_PHONE_REQUEST_RESEND'));
-    assert.ok(sent.some((entry) => entry.type === 'ADD_PHONE_FILL_CODE' && entry.payload.code === '987654'));
-    assert.ok(logs.some((entry) => /首轮/.test(entry.message)));
   } finally {
     Date.now = originalNow;
   }
@@ -429,62 +376,11 @@ test('reuse: WAIT_CODE activation is reused and getNumber is skipped', async () 
 
   assert.equal(result, true);
   assert.equal(getNumberCalled, false, 'getNumber should NOT be called when reusing');
-  assert.equal(savedActivations.length, 1, 'reuseCount should be updated and saved when reusing');
-  assert.equal(savedActivations[0].reuseCount, 1, 'reuseCount should be incremented to 1');
+  assert.equal(savedActivations.length, 0, 'no new activation saved when reusing');
   assert.equal(sent[0].payload.phone, '66800000000', 'reused phone is filled');
   assert.ok(setStatusCalls.find((c) => c.id === 'OLD' && c.status === '1'));
   assert.ok(setStatusCalls.find((c) => c.id === 'OLD' && c.status === '6'));
   assert.ok(logs.some((entry) => /复用该号码/.test(entry.message)));
-});
-
-test('reuse: skip reuse and get new number after MAX_REUSE_ATTEMPTS reached', async () => {
-  const MultiPagePhoneVerifyFlow = loadPhoneVerifyFlow();
-  let getNumberCalled = false;
-  const fetchImpl = makeFetchScript([
-    {
-      match: (url) => url.includes('action=getPrices'),
-      body: JSON.stringify({ 52: { dr: { cost: 0.05, count: 100 } } }),
-    },
-    {
-      match: (url) => url.includes('action=getNumber'),
-      body: () => { getNumberCalled = true; return 'ACCESS_NUMBER:NEW:66999999999'; },
-    },
-    {
-      match: (url) => url.includes('action=getStatus'),
-      body: () => 'STATUS_OK:778899',
-    },
-    {
-      match: (url) => url.includes('action=setStatus'),
-      body: () => 'ACCESS_ACTIVATION',
-    },
-  ]);
-
-  const { deps, logs, savedActivations } = createTestHarness({
-    fetchImpl,
-    loadHeroSmsConfig: async () => ({
-      enabled: true,
-      apiKey: 'KEY',
-      country: 52,
-      service: 'dr',
-      maxPrice: 0.05,
-      reuseLastActivation: true,
-    }),
-    loadLastActivation: async () => ({
-      activationId: 'OLD',
-      phone: '66800000000',
-      country: 52,
-      service: 'dr',
-      reuseCount: 2, // Already reached the limit
-    }),
-  });
-
-  const flow = MultiPagePhoneVerifyFlow.createPhoneVerifyFlow(deps);
-  const result = await flow.run(8, {}, { url: 'https://auth.openai.com/add-phone' });
-
-  assert.equal(result, true);
-  assert.equal(getNumberCalled, true, 'getNumber should be called when reuse limit reached');
-  assert.ok(logs.some((entry) => /已累计复用 2 次，触发自动刷新/.test(entry.message)));
-  assert.equal(savedActivations[0].reuseCount, 0, 'newly bought activation starts with reuseCount 0');
 });
 
 test('reuse: getStatus OK means activation already consumed, fallback to getNumber', async () => {
