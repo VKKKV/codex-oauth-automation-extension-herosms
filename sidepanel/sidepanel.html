@@ -625,6 +625,50 @@
         <div id="icloud-list" class="icloud-list"></div>
       </div>
     </div>
+    <div id="hero-sms-section" class="data-card hotmail-card">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">HeroSMS 手机验证</span>
+        </div>
+        <div class="section-mini-actions">
+          <button id="btn-hero-sms-test-balance" class="btn btn-ghost btn-xs" type="button">测余额</button>
+        </div>
+      </div>
+      <div class="data-row">
+        <span class="data-label">启用</span>
+        <label class="option-toggle" for="checkbox-hero-sms-enabled">
+          <input type="checkbox" id="checkbox-hero-sms-enabled" />
+          <span>步骤 8 遇到 add-phone 时自动使用 HeroSMS 验证</span>
+        </label>
+      </div>
+      <div class="data-row">
+        <span class="data-label">API Key</span>
+        <input type="password" id="input-hero-sms-api-key" class="data-input mono" placeholder="HeroSMS api_key" autocomplete="off" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">国家 ID</span>
+        <input type="number" id="input-hero-sms-country" class="data-input mono" placeholder="52" min="1" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">服务代码</span>
+        <input type="text" id="input-hero-sms-service" class="data-input mono" placeholder="ot" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">最高价</span>
+        <input type="number" id="input-hero-sms-max-price" class="data-input mono" placeholder="留空=动态最低价" min="0" step="0.001" />
+      </div>
+      <div class="data-row">
+        <span class="data-label">复用</span>
+        <label class="option-toggle" for="checkbox-hero-sms-reuse">
+          <input type="checkbox" id="checkbox-hero-sms-reuse" />
+          <span>优先复用上次还在激活期的手机号（省钱，activation 过期自动买新）</span>
+        </label>
+      </div>
+      <div class="data-row hotmail-actions-row">
+        <span id="hero-sms-balance-display" class="hero-sms-balance mono"></span>
+        <button id="btn-hero-sms-save" class="btn btn-primary btn-sm" type="button">保存</button>
+      </div>
+    </div>
     <div id="status-bar" class="status-bar">
       <div class="status-dot"></div>
       <span id="display-status">就绪</span>
@@ -730,6 +774,7 @@
   <script src="../icloud-utils.js"></script>
   <script src="../hotmail-utils.js"></script>
   <script src="../luckmail-utils.js"></script>
+  <script src="../hero-sms-utils.js"></script>
   <script src="../data/step-definitions.js"></script>
   <script src="update-service.js"></script>
   <script src="contribution-content-update-service.js"></script>

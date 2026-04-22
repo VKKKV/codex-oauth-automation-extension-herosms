@@ -4811,3 +4811,145 @@ restoreState().then(() => {
 }).catch((err) => {
   console.error('Failed to initialize sidepanel state:', err);
 });
+
+// ============================================================
+// HeroSMS phone verification config
+// ============================================================
+
+const heroSmsElements = {
+  section: document.getElementById('hero-sms-section'),
+  enabled: document.getElementById('checkbox-hero-sms-enabled'),
+  apiKey: document.getElementById('input-hero-sms-api-key'),
+  country: document.getElementById('input-hero-sms-country'),
+  service: document.getElementById('input-hero-sms-service'),
+  maxPrice: document.getElementById('input-hero-sms-max-price'),
+  reuse: document.getElementById('checkbox-hero-sms-reuse'),
+  testBalance: document.getElementById('btn-hero-sms-test-balance'),
+  save: document.getElementById('btn-hero-sms-save'),
+  balanceDisplay: document.getElementById('hero-sms-balance-display'),
+};
+
+function getHeroSmsUtils() {
+  return (typeof self !== 'undefined' && self.HeroSmsUtils) || window.HeroSmsUtils;
+}
+
+async function readHeroSmsConfigFromStorage() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(['heroSmsConfig'], (result) => {
+        resolve((result && result.heroSmsConfig) || {});
+      });
+    } catch (_) {
+      resolve({});
+    }
+  });
+}
+
+async function writeHeroSmsConfigToStorage(config) {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.storage.local.set({ heroSmsConfig: config }, () => {
+        if (chrome.runtime.lastError) {
+          reject(chrome.runtime.lastError);
+          return;
+        }
+        resolve();
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function readHeroSmsFormValues() {
+  return {
+    enabled: Boolean(heroSmsElements.enabled?.checked),
+    apiKey: (heroSmsElements.apiKey?.value || '').trim(),
+    country: Number(heroSmsElements.country?.value || 0) || '',
+    service: (heroSmsElements.service?.value || '').trim(),
+    maxPrice: (heroSmsElements.maxPrice?.value || '').trim(),
+    reuseLastActivation: Boolean(heroSmsElements.reuse?.checked),
+  };
+}
+
+function applyHeroSmsConfigToForm(config) {
+  const utils = getHeroSmsUtils();
+  const normalized = utils?.normalizeHeroSmsConfig
+    ? utils.normalizeHeroSmsConfig(config)
+    : { ...(utils?.DEFAULT_CONFIG || {}), ...config };
+
+  if (heroSmsElements.enabled) heroSmsElements.enabled.checked = Boolean(normalized.enabled);
+  if (heroSmsElements.apiKey) heroSmsElements.apiKey.value = normalized.apiKey || '';
+  if (heroSmsElements.country) heroSmsElements.country.value = String(normalized.country || '');
+  if (heroSmsElements.service) heroSmsElements.service.value = normalized.service || '';
+  if (heroSmsElements.maxPrice) {
+    heroSmsElements.maxPrice.value = normalized.maxPrice === '' ? '' : String(normalized.maxPrice);
+  }
+  if (heroSmsElements.reuse) heroSmsElements.reuse.checked = Boolean(normalized.reuseLastActivation);
+}
+
+function setHeroSmsBalanceMessage(text, { isError = false } = {}) {
+  if (!heroSmsElements.balanceDisplay) return;
+  heroSmsElements.balanceDisplay.textContent = text || '';
+  heroSmsElements.balanceDisplay.classList.toggle('is-error', Boolean(isError));
+}
+
+async function handleHeroSmsSave() {
+  const utils = getHeroSmsUtils();
+  const raw = readHeroSmsFormValues();
+  const normalized = utils?.normalizeHeroSmsConfig
+    ? utils.normalizeHeroSmsConfig(raw)
+    : raw;
+
+  try {
+    await writeHeroSmsConfigToStorage(normalized);
+    applyHeroSmsConfigToForm(normalized);
+    setHeroSmsBalanceMessage('已保存配置', {});
+  } catch (err) {
+    setHeroSmsBalanceMessage(`保存失败：${err?.message || err}`, { isError: true });
+  }
+}
+
+async function handleHeroSmsTestBalance() {
+  const utils = getHeroSmsUtils();
+  if (!utils?.getBalance) {
+    setHeroSmsBalanceMessage('HeroSMS 客户端尚未加载。', { isError: true });
+    return;
+  }
+  const raw = readHeroSmsFormValues();
+  const apiKey = raw.apiKey;
+  if (!apiKey) {
+    setHeroSmsBalanceMessage('请先填写 api_key。', { isError: true });
+    return;
+  }
+  setHeroSmsBalanceMessage('查询余额中...', {});
+  try {
+    const result = await utils.getBalance(apiKey);
+    if (result.ok) {
+      setHeroSmsBalanceMessage(`余额：${result.balance}`, {});
+    } else {
+      setHeroSmsBalanceMessage(`查询失败：${result.error || '未知错误'}`, { isError: true });
+    }
+  } catch (err) {
+    setHeroSmsBalanceMessage(`查询失败：${err?.message || err}`, { isError: true });
+  }
+}
+
+function initHeroSmsConfigCard() {
+  if (!heroSmsElements.section) return;
+  heroSmsElements.save?.addEventListener('click', () => {
+    handleHeroSmsSave().catch((err) => {
+      console.error('[HeroSMS] save error:', err);
+    });
+  });
+  heroSmsElements.testBalance?.addEventListener('click', () => {
+    handleHeroSmsTestBalance().catch((err) => {
+      console.error('[HeroSMS] test balance error:', err);
+    });
+  });
+  readHeroSmsConfigFromStorage().then((config) => {
+    applyHeroSmsConfigToForm(config || {});
+  });
+}
+
+initHeroSmsConfigCard();

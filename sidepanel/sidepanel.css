@@ -2528,3 +2528,14 @@ header {
     transition-duration: 0.01ms !important;
   }
 }
+
+.hero-sms-balance {
+  flex: 1;
+  font-size: 12px;
+  opacity: 0.75;
+  margin-right: 8px;
+}
+.hero-sms-balance.is-error {
+  color: var(--danger, #d14343);
+  opacity: 1;
+}

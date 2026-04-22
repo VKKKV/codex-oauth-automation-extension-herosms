@@ -23,6 +23,11 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
       || message.type === 'RESEND_VERIFICATION_CODE'
       || message.type === 'ENSURE_SIGNUP_ENTRY_READY'
       || message.type === 'ENSURE_SIGNUP_PASSWORD_PAGE_READY'
+      || message.type === 'ADD_PHONE_GET_STATE'
+      || message.type === 'ADD_PHONE_FILL_NUMBER'
+      || message.type === 'ADD_PHONE_SUBMIT'
+      || message.type === 'ADD_PHONE_REQUEST_RESEND'
+      || message.type === 'ADD_PHONE_FILL_CODE'
     ) {
       resetStopState();
       handleCommand(message).then((result) => {
@@ -86,6 +91,16 @@ async function handleCommand(message) {
       return getStep8State();
     case 'STEP8_TRIGGER_CONTINUE':
       return await step8_triggerContinue(message.payload);
+    case 'ADD_PHONE_GET_STATE':
+      return getAddPhonePageState();
+    case 'ADD_PHONE_FILL_NUMBER':
+      return await fillAddPhoneNumber(message.payload);
+    case 'ADD_PHONE_SUBMIT':
+      return await submitAddPhoneForm(message.payload);
+    case 'ADD_PHONE_REQUEST_RESEND':
+      return await requestAddPhoneResend();
+    case 'ADD_PHONE_FILL_CODE':
+      return await fillVerificationCode(8, message.payload);
   }
 }
 
@@ -2193,6 +2208,241 @@ async function fillVerificationCode(step, payload) {
   }
 
   return outcome;
+}
+
+// ============================================================
+// add-phone page: HeroSMS integration
+// ============================================================
+
+const ADD_PHONE_NUMBER_INPUT_SELECTOR = [
+  'input#tel[type="tel"]',
+  'input[name="__reservedForPhoneNumberInput_tel"]',
+  'input[type="tel"][autocomplete="tel"]',
+  'input[name*="phone" i]:not([type="hidden"])',
+  'input[autocomplete="tel-national"]',
+  'input[id*="phone" i]:not([type="hidden"])',
+  'input[type="tel"]:not([maxlength="6"])',
+].join(', ');
+
+const ADD_PHONE_HIDDEN_COUNTRY_SELECT_SELECTOR = [
+  '[data-testid="hidden-select-container"] select',
+  'form[action*="/add-phone" i] select',
+  'select[name*="country" i]',
+  'select[id*="country" i]',
+  'select[aria-label*="country" i]',
+  'select[aria-label*="国家" i]',
+].join(', ');
+
+const ADD_PHONE_COUNTRY_BUTTON_SELECTOR = [
+  'form[action*="/add-phone" i] button[aria-haspopup="listbox"]',
+  'button[aria-haspopup="listbox"][aria-labelledby*="react-aria"]',
+].join(', ');
+
+function findAddPhoneInput() {
+  const candidates = Array.from(document.querySelectorAll(ADD_PHONE_NUMBER_INPUT_SELECTOR));
+  return candidates.find((el) => el.type !== 'hidden' && isVisibleElement(el))
+    || candidates.find((el) => el.type !== 'hidden')
+    || null;
+}
+
+function findAddPhoneCountrySelect() {
+  const selects = Array.from(document.querySelectorAll(ADD_PHONE_HIDDEN_COUNTRY_SELECT_SELECTOR));
+  return selects.find((el) => (el.options?.length || 0) > 0) || null;
+}
+
+function findAddPhoneCountryButton() {
+  const buttons = Array.from(document.querySelectorAll(ADD_PHONE_COUNTRY_BUTTON_SELECTOR));
+  return buttons.find((el) => isVisibleElement(el)) || null;
+}
+
+function findAddPhoneSubmitButton() {
+  const form = document.querySelector('form[action*="/add-phone" i]') || document.querySelector('form');
+  const scope = form || document;
+  const scoped = Array.from(scope.querySelectorAll(
+    'button[type="submit"][data-dd-action-name="Continue"], button[type="submit"], input[type="submit"], [role="button"]'
+  ));
+  const visible = scoped.filter((el) => isVisibleElement(el) && isActionEnabled(el));
+  const named = visible.find((el) => {
+    const ddAction = el.getAttribute?.('data-dd-action-name') || '';
+    if (ddAction === 'Continue') return true;
+    const label = normalizeInlineText([
+      el.textContent || '',
+      el.getAttribute?.('aria-label') || '',
+      el.value || '',
+    ].filter(Boolean).join(' '));
+    return CONTINUE_ACTION_PATTERN.test(label) || /next|submit|send|发送|验证|下一步|提交/i.test(label);
+  });
+  return named || visible[0] || null;
+}
+
+function stripAddPhoneDialPrefix(phone, countryId) {
+  const digits = String(phone == null ? '' : phone).replace(/[^0-9+]/g, '').replace(/^\+/, '');
+  if (!digits) return '';
+  if (countryId === 52 && digits.startsWith('66')) return digits.slice(2);
+  return digits;
+}
+
+function getAddPhonePageState() {
+  const input = findAddPhoneInput();
+  const select = findAddPhoneCountrySelect();
+  const countryButton = findAddPhoneCountryButton();
+  return {
+    url: location.href,
+    addPhonePage: isAddPhonePageReady(),
+    hasPhoneInput: Boolean(input),
+    hasCountrySelect: Boolean(select),
+    countrySelectOptions: select ? select.options.length : 0,
+    hasCountryButton: Boolean(countryButton),
+    currentCountry: select ? select.value : '',
+    currentCountryLabel: countryButton ? (countryButton.textContent || '').trim() : '',
+    inputName: input?.name || input?.id || '',
+  };
+}
+
+function dispatchReactChangeEvent(el) {
+  try {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } catch (_) {}
+}
+
+async function trySelectAddPhoneCountry(countryIso) {
+  if (!countryIso) return false;
+  const iso = String(countryIso).toUpperCase();
+  const select = findAddPhoneCountrySelect();
+  if (!select) return false;
+  const match = Array.from(select.options || []).find((opt) => {
+    const value = String(opt.value || '').toUpperCase();
+    return value === iso;
+  });
+  if (!match) return false;
+  if (select.value === match.value) return true;
+
+  const descriptor = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value');
+  if (descriptor && typeof descriptor.set === 'function') {
+    descriptor.set.call(select, match.value);
+  } else {
+    select.value = match.value;
+  }
+  dispatchReactChangeEvent(select);
+  log(`add-phone：已将国家下拉切到 ${iso}（${match.textContent || ''}）`);
+  return true;
+}
+
+async function waitForAddPhoneCountryApplied(expectedIso, timeout = 3000) {
+  if (!expectedIso) return true;
+  const iso = String(expectedIso).toUpperCase();
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    const select = findAddPhoneCountrySelect();
+    if (select && String(select.value || '').toUpperCase() === iso) {
+      return true;
+    }
+    await sleep(150);
+  }
+  return false;
+}
+
+async function fillAddPhoneNumber(payload = {}) {
+  const { phone, country, countryIso } = payload;
+  if (!phone) {
+    throw new Error('未提供手机号，无法填写 add-phone 页面。');
+  }
+  if (!isAddPhonePageReady()) {
+    throw new Error(`当前页面未进入 add-phone。URL: ${location.href}`);
+  }
+
+  const iso = String(countryIso || '').toUpperCase();
+
+  // Fill phone first — React-Aria may re-detect country from digits.
+  // We re-apply the country after filling so the final country stays correct.
+  const input = findAddPhoneInput();
+  if (!input) {
+    throw new Error(`add-phone 页面未找到手机号输入框。URL: ${location.href}`);
+  }
+  const digits = stripAddPhoneDialPrefix(phone, Number(country));
+  if (input.value) {
+    fillInput(input, '');
+    await sleep(120);
+  }
+  fillInput(input, digits);
+  await sleep(200);
+
+  if (iso) {
+    const switched = await trySelectAddPhoneCountry(iso);
+    if (!switched) {
+      log(`add-phone：未找到 ISO ${iso} 对应的下拉选项，将按当前选中国家提交。`, 'warn');
+    } else {
+      await waitForAddPhoneCountryApplied(iso);
+      // Re-apply once more to defeat any late React-Aria re-detection.
+      await sleep(150);
+      await trySelectAddPhoneCountry(iso);
+    }
+  }
+
+  await humanPause(200, 500);
+  log(`add-phone：已填入手机号 ${digits}（原始 ${phone}，国家 ${iso || country || 'unknown'}）`);
+  return { ok: true, filledDigits: digits, countryIso: iso };
+}
+
+async function submitAddPhoneForm() {
+  if (!isAddPhonePageReady()) {
+    throw new Error(`当前页面未进入 add-phone。URL: ${location.href}`);
+  }
+  const button = findAddPhoneSubmitButton();
+  if (!button) {
+    throw new Error(`add-phone 页面未找到“继续”按钮。URL: ${location.href}`);
+  }
+  await humanPause(300, 900);
+  const form = button.closest?.('form') || document.querySelector('form[action*="/add-phone" i]');
+  let submitted = false;
+  if (form && typeof form.requestSubmit === 'function') {
+    try {
+      form.requestSubmit(button);
+      submitted = true;
+    } catch (err) {
+      console.warn(LOG_PREFIX, 'add-phone requestSubmit 失败，回退到 click：', err?.message || err);
+    }
+  }
+  if (!submitted) {
+    simulateClick(button);
+  }
+  log('add-phone：已点击“继续”，等待 SMS 验证码页面。');
+
+  const start = Date.now();
+  const timeout = 15000;
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    if (document.querySelector(VERIFICATION_CODE_INPUT_SELECTOR)) {
+      return { ok: true, reachedVerificationPage: true, url: location.href };
+    }
+    if (!isAddPhonePageReady() && !location.pathname.includes('/add-phone')) {
+      return { ok: true, url: location.href };
+    }
+    await sleep(250);
+  }
+  return { ok: true, assumed: true, url: location.href };
+}
+
+async function requestAddPhoneResend() {
+  const start = Date.now();
+  const timeout = 12000;
+  let trigger = null;
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    trigger = findResendVerificationCodeTrigger({ allowDisabled: false });
+    if (trigger) break;
+    await sleep(250);
+  }
+  if (!trigger) {
+    throw new Error(`add-phone：未找到可点击的“重新发送短信”按钮。URL: ${location.href}`);
+  }
+  await humanPause(200, 500);
+  simulateClick(trigger);
+  const label = getActionText(trigger) || '重新发送';
+  log(`add-phone：已点击“${label}”请求 OpenAI 重发短信。`);
+  return { ok: true, url: location.href };
 }
 
 // ============================================================

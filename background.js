@@ -11,6 +11,7 @@ importScripts(
   'background/signup-flow-helpers.js',
   'background/message-router.js',
   'background/verification-flow.js',
+  'background/phone-verify-flow.js',
   'background/auto-run-controller.js',
   'background/tab-runtime.js',
   'background/navigation-utils.js',
@@ -31,6 +32,7 @@ importScripts(
   'hotmail-utils.js',
   'microsoft-email.js',
   'luckmail-utils.js',
+  'hero-sms-utils.js',
   'cloudflare-temp-email-utils.js',
   'icloud-utils.js',
   'content/activation-utils.js'
@@ -6190,6 +6192,56 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   SIGNUP_PAGE_INJECT_FILES,
   waitForTabUrlMatch,
 });
+async function loadHeroSmsConfig() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(['heroSmsConfig'], (result) => {
+        resolve((result && result.heroSmsConfig) || {});
+      });
+    } catch (err) {
+      resolve({});
+    }
+  });
+}
+
+async function loadHeroSmsLastActivation() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(['heroSmsLastActivation'], (result) => {
+        resolve((result && result.heroSmsLastActivation) || null);
+      });
+    } catch (err) {
+      resolve(null);
+    }
+  });
+}
+
+async function saveHeroSmsLastActivation(activation) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.set({ heroSmsLastActivation: activation || null }, () => resolve());
+    } catch (err) {
+      resolve();
+    }
+  });
+}
+
+async function clearHeroSmsLastActivation() {
+  return saveHeroSmsLastActivation(null);
+}
+
+const phoneVerifyFlow = self.MultiPagePhoneVerifyFlow?.createPhoneVerifyFlow({
+  addLog,
+  HeroSmsUtils: self.HeroSmsUtils,
+  loadHeroSmsConfig,
+  loadLastActivation: loadHeroSmsLastActivation,
+  saveLastActivation: saveHeroSmsLastActivation,
+  clearLastActivation: clearHeroSmsLastActivation,
+  sendToContentScriptResilient,
+  sleepWithStop,
+  throwIfStopped,
+});
+
 const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.createVerificationFlowHelpers({
   addLog,
   chrome,
@@ -6210,6 +6262,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   LUCKMAIL_PROVIDER,
   MAIL_2925_VERIFICATION_INTERVAL_MS,
   MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
+  phoneVerifyFlow,
   pollCloudflareTempEmailVerificationCode,
   pollHotmailVerificationCode,
   pollLuckmailVerificationCode,

@@ -19,6 +19,7 @@
       LUCKMAIL_PROVIDER,
       MAIL_2925_VERIFICATION_INTERVAL_MS,
       MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
+      phoneVerifyFlow,
       pollCloudflareTempEmailVerificationCode,
       pollHotmailVerificationCode,
       pollLuckmailVerificationCode,
@@ -748,6 +749,26 @@
           }
 
           if (submitResult.addPhonePage) {
+            if (phoneVerifyFlow && typeof phoneVerifyFlow.run === 'function') {
+              try {
+                const handled = await phoneVerifyFlow.run(step, state, { url: submitResult.url });
+                if (handled) {
+                  await setState({
+                    lastEmailTimestamp: result.emailTimestamp,
+                    [stateKey]: result.code,
+                  });
+                  await completeStepFromBackground(step, {
+                    emailTimestamp: result.emailTimestamp,
+                    code: result.code,
+                  });
+                  triggerPostSuccessMailboxCleanup(step, mail);
+                  return;
+                }
+              } catch (phoneErr) {
+                if (isStopError(phoneErr)) throw phoneErr;
+                await addLog(`步骤 ${step}：HeroSMS 手机验证抛出异常：${phoneErr?.message || phoneErr}`, 'warn');
+              }
+            }
             const urlPart = submitResult.url ? ` URL: ${submitResult.url}` : '';
             throw new Error(`步骤 ${step}：验证码提交后页面进入手机号页面，当前流程无法继续自动授权。${urlPart}`.trim());
           }
