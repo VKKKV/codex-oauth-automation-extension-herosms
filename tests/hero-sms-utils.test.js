@@ -15,6 +15,7 @@ const {
   parseSetStatusResponse,
   pickLowestPrice,
   stripDialPrefix,
+  resolveCountryIso,
   getBalance,
   getNumber,
   getStatus,
@@ -164,9 +165,23 @@ test('pickLowestPrice navigates both nested shapes and skips empty entries', () 
   assert.equal(pickLowestPrice({ 52: { ot: {} } }, { service: 'ot', country: 52 }), null);
 });
 
-test('stripDialPrefix drops +66 for Thailand numbers but keeps others as-is', () => {
+test('resolveCountryIso maps IDs to codes', () => {
+  assert.equal(resolveCountryIso(52), 'TH');
+  assert.equal(resolveCountryIso(6), 'ID');
+  assert.equal(resolveCountryIso(16), 'CM');
+  assert.equal(resolveCountryIso(41), 'CM');
+  assert.equal(resolveCountryIso(0), '');
+  assert.equal(resolveCountryIso(null), '');
+});
+
+test('stripDialPrefix drops prefixes for TH, ID, and CM', () => {
   assert.equal(stripDialPrefix('66812345678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('+66 812-345-678', { country: 52 }), '812345678');
+  assert.equal(stripDialPrefix('628123456789', { country: 6 }), '8123456789');
+  assert.equal(stripDialPrefix('+62 0812-345-6789', { country: 6 }), '8123456789');
+  assert.equal(stripDialPrefix('08123456789', { country: 6 }), '8123456789');
+  assert.equal(stripDialPrefix('237658956620', { country: 41 }), '658956620');
+  assert.equal(stripDialPrefix('+237 658-956-620', { country: 16 }), '658956620');
   assert.equal(stripDialPrefix('812345678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('1234567890', { country: 0 }), '1234567890');
   assert.equal(stripDialPrefix('', { country: 52 }), '');

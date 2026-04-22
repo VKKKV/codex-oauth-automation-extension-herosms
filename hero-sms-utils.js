@@ -173,7 +173,10 @@
     const raw = String(phone == null ? '' : phone).replace(/[^0-9+]/g, '');
     if (!raw) return '';
     const digits = raw.replace(/^\+/, '');
-    const dial = country === 52 ? '66' : '';
+    let dial = '';
+    if (country === 52) dial = '66';
+    if (country === 6) dial = '62';
+    if (country === 16 || country === 41) dial = '237';
     if (dial && digits.startsWith(dial)) {
       return digits.slice(dial.length);
     }
@@ -182,6 +185,9 @@
 
   const COUNTRY_ID_TO_ISO = Object.freeze({
     52: 'TH',
+    6: 'ID',
+    16: 'CM',
+    41: 'CM',
   });
 
   function resolveCountryIso(countryId) {

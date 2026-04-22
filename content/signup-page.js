@@ -2279,6 +2279,8 @@ function stripAddPhoneDialPrefix(phone, countryId) {
   const digits = String(phone == null ? '' : phone).replace(/[^0-9+]/g, '').replace(/^\+/, '');
   if (!digits) return '';
   if (countryId === 52 && digits.startsWith('66')) return digits.slice(2);
+  if (countryId === 6 && digits.startsWith('62')) return digits.slice(2);
+  if (countryId === 41 && digits.startsWith('237')) return digits.slice(3);
   return digits;
 }
 
@@ -2354,35 +2356,53 @@ async function fillAddPhoneNumber(payload = {}) {
   }
 
   const iso = String(countryIso || '').toUpperCase();
-
-  // Fill phone first — React-Aria may re-detect country from digits.
-  // We re-apply the country after filling so the final country stays correct.
   const input = findAddPhoneInput();
   if (!input) {
     throw new Error(`add-phone 页面未找到手机号输入框。URL: ${location.href}`);
   }
-  const digits = stripAddPhoneDialPrefix(phone, Number(country));
-  if (input.value) {
-    fillInput(input, '');
-    await sleep(120);
-  }
-  fillInput(input, digits);
-  await sleep(200);
 
+  // 1. Switch country FIRST. 
+  // This ensures the UI uses the correct validation rules and maxlength for the target country (e.g. 12+ digits for ID instead of 10 for US).
   if (iso) {
     const switched = await trySelectAddPhoneCountry(iso);
-    if (!switched) {
-      log(`add-phone：未找到 ISO ${iso} 对应的下拉选项，将按当前选中国家提交。`, 'warn');
-    } else {
+    if (switched) {
       await waitForAddPhoneCountryApplied(iso);
-      // Re-apply once more to defeat any late React-Aria re-detection.
-      await sleep(150);
-      await trySelectAddPhoneCountry(iso);
+      await sleep(400); // Wait for React/Aria to settle its new validation state
+    } else {
+      log(`add-phone：未找到 ISO ${iso} 对应的下拉选项，将按当前选中国家填写。`, 'warn');
     }
   }
 
+  // 2. Aggressively remove length/format constraints
+  const clearConstraints = (el) => {
+    if (el.hasAttribute('maxlength')) el.removeAttribute('maxlength');
+    if (el.hasAttribute('pattern')) el.removeAttribute('pattern');
+  };
+  clearConstraints(input);
+
+  // 3. Fill digits
+  const digits = stripAddPhoneDialPrefix(phone, Number(country));
+  if (input.value) {
+    fillInput(input, '');
+    await sleep(150);
+  }
+  
+  clearConstraints(input);
+  fillInput(input, digits);
+  await sleep(400);
+
+  // 4. Verification and Force-Correction
+  // We check the numeric content to ignore formatting characters like () or -
+  const currentVal = input.value.replace(/[^0-9]/g, '');
+  if (currentVal !== digits) {
+    log(`add-phone：检测到填入值不完全匹配（期望 ${digits}，实际已填 ${currentVal}），正在强制二次修正...`, 'warn');
+    clearConstraints(input);
+    fillInput(input, digits);
+    await sleep(300);
+  }
+
   await humanPause(200, 500);
-  log(`add-phone：已填入手机号 ${digits}（原始 ${phone}，国家 ${iso || country || 'unknown'}）`);
+  log(`add-phone：已填入手机号 ${input.value}（原始 ${phone}，国家 ${iso || 'unknown'}）`);
   return { ok: true, filledDigits: digits, countryIso: iso };
 }
 
