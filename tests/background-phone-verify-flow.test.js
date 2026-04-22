@@ -532,7 +532,7 @@ test('reuse disabled: always calls getNumber even if lastActivation exists', asy
   assert.equal(getNumberCalled, true, 'reuse=false should call getNumber even with alive activation');
 });
 
-test('reuse=true preserves activation on timeout (no setStatus=8) so next round can reuse', async () => {
+test('reuse=true does NOT preserve activation on timeout because we must restart from step 7', async () => {
   const MultiPagePhoneVerifyFlow = loadPhoneVerifyFlow();
   const setStatusCalls = [];
   const fetchImpl = makeFetchScript([
@@ -558,7 +558,7 @@ test('reuse=true preserves activation on timeout (no setStatus=8) so next round 
   let clock = 0;
   Date.now = () => clock;
   try {
-    const { deps, logs } = createTestHarness({
+    const { deps } = createTestHarness({
       fetchImpl,
       sleepWithStop: async (ms) => { clock += ms; },
       loadHeroSmsConfig: async () => ({
@@ -571,14 +571,13 @@ test('reuse=true preserves activation on timeout (no setStatus=8) so next round 
       }),
     });
     const flow = MultiPagePhoneVerifyFlow.createPhoneVerifyFlow(deps);
-    const result = await flow.run(8, {}, {});
-    assert.equal(result, false);
-    assert.deepEqual(
-      setStatusCalls.map((c) => c.status),
-      ['1', '3'],
-      'reuse=true: only SMS_SENT + REQUEST_RESEND, NO setStatus=8 cancel'
+    
+    await assert.rejects(
+      () => flow.run(8, {}, {}),
+      (err) => /STEP8_RESTART_STEP7::/.test(err.message)
     );
-    assert.ok(logs.some((entry) => /保留 HeroSMS activation/.test(entry.message)));
+
+    assert.ok(setStatusCalls.find((c) => c.id === 'PRESERVED' && c.status === '8'), 'activation is cancelled on timeout even with reuse=true');
   } finally {
     Date.now = originalNow;
   }

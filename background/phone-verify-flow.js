@@ -208,6 +208,7 @@
         'info'
       );
 
+      let lastPhoneError = null;
       let activationId = null;
       let phone = null;
       let reused = false;
@@ -358,16 +359,28 @@
         await addLog('步骤 8：HeroSMS 手机验证已完成。', 'ok');
         return true;
       } catch (err) {
+        lastPhoneError = err;
         await addLog(`步骤 8：HeroSMS 手机验证失败：${err?.message || err}`, 'warn');
+        if (/STEP8_RESTART_STEP7::/.test(err.message)) {
+          throw err;
+        }
         return false;
       } finally {
         if (!finished) {
-          if (config.reuseLastActivation) {
-            await addLog(
-              `步骤 8：已保留 HeroSMS activation ${activationId} 供下轮复用（不取消），activation 过期前下轮可免费再试。`,
-              'info'
-            );
-          } else {
+          const isRestart = /STEP8_RESTART_STEP7::/.test(String(lastPhoneError?.message || ''));
+
+          if (config.reuseLastActivation && !isRestart) {
+            // Only claim preservation if we didn't explicitly clear it
+            let currentLast;
+            try { currentLast = await loadLastActivation(); } catch (_) {}
+            
+            if (currentLast && currentLast.activationId === activationId) {
+              await addLog(
+                `步骤 8：已保留 HeroSMS activation ${activationId} 供下轮复用（不取消），activation 过期前下轮可免费再试。`,
+                'info'
+              );
+            }
+          } else if (!isRestart) {
             await safeCancelActivation(config.apiKey, activationId);
           }
         }

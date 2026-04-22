@@ -766,6 +766,9 @@
                 }
               } catch (phoneErr) {
                 if (isStopError(phoneErr)) throw phoneErr;
+                if (/STEP8_RESTART_STEP7::/.test(phoneErr?.message || '')) {
+                  throw phoneErr;
+                }
                 await addLog(`步骤 ${step}：HeroSMS 手机验证抛出异常：${phoneErr?.message || phoneErr}`, 'warn');
               }
             }
