@@ -429,11 +429,62 @@ test('reuse: WAIT_CODE activation is reused and getNumber is skipped', async () 
 
   assert.equal(result, true);
   assert.equal(getNumberCalled, false, 'getNumber should NOT be called when reusing');
-  assert.equal(savedActivations.length, 0, 'no new activation saved when reusing');
+  assert.equal(savedActivations.length, 1, 'reuseCount should be updated and saved when reusing');
+  assert.equal(savedActivations[0].reuseCount, 1, 'reuseCount should be incremented to 1');
   assert.equal(sent[0].payload.phone, '66800000000', 'reused phone is filled');
   assert.ok(setStatusCalls.find((c) => c.id === 'OLD' && c.status === '1'));
   assert.ok(setStatusCalls.find((c) => c.id === 'OLD' && c.status === '6'));
   assert.ok(logs.some((entry) => /复用该号码/.test(entry.message)));
+});
+
+test('reuse: skip reuse and get new number after MAX_REUSE_ATTEMPTS reached', async () => {
+  const MultiPagePhoneVerifyFlow = loadPhoneVerifyFlow();
+  let getNumberCalled = false;
+  const fetchImpl = makeFetchScript([
+    {
+      match: (url) => url.includes('action=getPrices'),
+      body: JSON.stringify({ 52: { dr: { cost: 0.05, count: 100 } } }),
+    },
+    {
+      match: (url) => url.includes('action=getNumber'),
+      body: () => { getNumberCalled = true; return 'ACCESS_NUMBER:NEW:66999999999'; },
+    },
+    {
+      match: (url) => url.includes('action=getStatus'),
+      body: () => 'STATUS_OK:778899',
+    },
+    {
+      match: (url) => url.includes('action=setStatus'),
+      body: () => 'ACCESS_ACTIVATION',
+    },
+  ]);
+
+  const { deps, logs, savedActivations } = createTestHarness({
+    fetchImpl,
+    loadHeroSmsConfig: async () => ({
+      enabled: true,
+      apiKey: 'KEY',
+      country: 52,
+      service: 'dr',
+      maxPrice: 0.05,
+      reuseLastActivation: true,
+    }),
+    loadLastActivation: async () => ({
+      activationId: 'OLD',
+      phone: '66800000000',
+      country: 52,
+      service: 'dr',
+      reuseCount: 2, // Already reached the limit
+    }),
+  });
+
+  const flow = MultiPagePhoneVerifyFlow.createPhoneVerifyFlow(deps);
+  const result = await flow.run(8, {}, { url: 'https://auth.openai.com/add-phone' });
+
+  assert.equal(result, true);
+  assert.equal(getNumberCalled, true, 'getNumber should be called when reuse limit reached');
+  assert.ok(logs.some((entry) => /已累计复用 2 次，触发自动刷新/.test(entry.message)));
+  assert.equal(savedActivations[0].reuseCount, 0, 'newly bought activation starts with reuseCount 0');
 });
 
 test('reuse: getStatus OK means activation already consumed, fallback to getNumber', async () => {

@@ -175,7 +175,12 @@
     const digits = raw.replace(/^\+/, '');
     let dial = '';
     if (country === 52) dial = '66';
-    if (country === 6) dial = '62';
+    if (country === 6) {
+      let s = digits;
+      if (s.startsWith('62')) s = s.slice(2);
+      if (s.startsWith('0')) s = s.slice(1);
+      return s;
+    }
     if (country === 16 || country === 41) dial = '237';
     if (dial && digits.startsWith(dial)) {
       return digits.slice(dial.length);

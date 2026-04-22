@@ -79,6 +79,8 @@
       return result || {};
     }
 
+    const MAX_REUSE_ATTEMPTS = 2; // Maximum times we can reuse an activationId before refreshing
+
     async function pollSmsCode(apiKey, activationId, { round = 1 } = {}) {
       const deadline = Date.now() + POLL_TIMEOUT_MS;
       let attempt = 0;
@@ -123,6 +125,16 @@
         await addLog('步骤 8：未找到可复用的上次 HeroSMS 号码，将买新号。', 'info');
         return null;
       }
+
+      const currentReuseCount = Number(last.reuseCount || 0);
+      if (currentReuseCount >= MAX_REUSE_ATTEMPTS) {
+        await addLog(`步骤 8：上次号码 +${last.phone} 已累计复用 ${currentReuseCount} 次，触发自动刷新购买新号码。`, 'info');
+        if (typeof clearLastActivation === 'function') {
+          try { await clearLastActivation(); } catch (_) {}
+        }
+        return null;
+      }
+
       if (last.country && Number(last.country) !== Number(country)) {
         await addLog(`步骤 8：上次号码所属国家 ${last.country} 与当前配置 ${country} 不一致，跳过复用。`, 'info');
         return null;
@@ -133,7 +145,7 @@
       }
 
       await addLog(
-        `步骤 8：检测到上次 HeroSMS 号码 +${last.phone}（activationId=${last.activationId}），正在调用 getStatus 验证是否仍可复用...`,
+        `步骤 8：检测到上次 HeroSMS 号码 +${last.phone}（activationId=${last.activationId}，已复用 ${currentReuseCount} 次），正在验证是否仍可复用...`,
         'info'
       );
       let status;
@@ -148,6 +160,13 @@
           `步骤 8：上次号码 +${last.phone} 仍在激活期（getStatus=STATUS_${status.status}），复用该号码。`,
           'ok'
         );
+
+        // Update reuse count and save
+        last.reuseCount = currentReuseCount + 1;
+        if (typeof saveLastActivation === 'function') {
+          try { await saveLastActivation(last); } catch (_) {}
+        }
+
         return { activationId: last.activationId, phone: last.phone };
       }
       await addLog(
@@ -276,6 +295,7 @@
               phone,
               country: config.country,
               service: config.service,
+              reuseCount: 0, // Initial attempt
               savedAt: Date.now(),
             });
           } catch (saveErr) {
