@@ -177,6 +177,7 @@
     if (country === 52) dial = '66';
     if (country === 6) dial = '62';
     if (country === 16) dial = '44';
+    if (country === 117) dial = '351';
     if (country === 41) dial = '237';
     if (dial && digits.startsWith(dial)) {
       return digits.slice(dial.length);
@@ -188,6 +189,7 @@
     52: 'TH',
     6: 'ID',
     16: 'GB',
+    117: 'PT',
     41: 'CM',
   });
 

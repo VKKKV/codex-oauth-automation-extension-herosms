@@ -169,16 +169,18 @@ test('resolveCountryIso maps IDs to codes', () => {
   assert.equal(resolveCountryIso(52), 'TH');
   assert.equal(resolveCountryIso(6), 'ID');
   assert.equal(resolveCountryIso(16), 'GB');
+  assert.equal(resolveCountryIso(117), 'PT');
   assert.equal(resolveCountryIso(41), 'CM');
   assert.equal(resolveCountryIso(0), '');
   assert.equal(resolveCountryIso(null), '');
 });
 
-test('stripDialPrefix drops prefixes for TH, ID, UK, and CM', () => {
+test('stripDialPrefix drops prefixes for TH, ID, UK, PT, and CM', () => {
   assert.equal(stripDialPrefix('66812345678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('+66 812-345-678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('628123456789', { country: 6 }), '8123456789');
   assert.equal(stripDialPrefix('447123456789', { country: 16 }), '7123456789');
+  assert.equal(stripDialPrefix('351912345678', { country: 117 }), '912345678');
   assert.equal(stripDialPrefix('237658956620', { country: 41 }), '658956620');
   assert.equal(stripDialPrefix('812345678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('1234567890', { country: 0 }), '1234567890');
