@@ -22,14 +22,14 @@ const {
   setStatus,
 } = require('../hero-sms-utils.js');
 
-test('DEFAULT_CONFIG matches Thailand + OpenAI defaults', () => {
+test('DEFAULT_CONFIG matches England + OpenAI defaults', () => {
   assert.equal(DEFAULT_CONFIG.enabled, false);
   assert.equal(DEFAULT_CONFIG.apiKey, '');
-  assert.equal(DEFAULT_CONFIG.country, 41);
+  assert.equal(DEFAULT_CONFIG.country, 16);
   assert.equal(DEFAULT_CONFIG.service, 'dr');
   assert.equal(DEFAULT_CONFIG.maxPrice, '');
   assert.equal(DEFAULT_CONFIG.reuseLastActivation, false);
-  assert.equal(HERO_SMS_DEFAULT_COUNTRY, 41);
+  assert.equal(HERO_SMS_DEFAULT_COUNTRY, 16);
   assert.equal(HERO_SMS_DEFAULT_SERVICE, 'dr');
   assert.equal(ACTIVATION_STATUS.COMPLETE, 6);
   assert.equal(ACTIVATION_STATUS.CANCEL, 8);
@@ -39,7 +39,7 @@ test('normalizeHeroSmsConfig trims and falls back to defaults', () => {
   assert.deepEqual(normalizeHeroSmsConfig(), {
     enabled: false,
     apiKey: '',
-    country: 41,
+    country: 16,
     service: 'dr',
     maxPrice: '',
     reuseLastActivation: false,
@@ -69,7 +69,7 @@ test('normalizeHeroSmsConfig trims and falls back to defaults', () => {
   }), {
     enabled: false,
     apiKey: '',
-    country: 41,
+    country: 16,
     service: 'dr',
     maxPrice: '',
     reuseLastActivation: false,
@@ -168,15 +168,17 @@ test('pickLowestPrice navigates both nested shapes and skips empty entries', () 
 test('resolveCountryIso maps IDs to codes', () => {
   assert.equal(resolveCountryIso(52), 'TH');
   assert.equal(resolveCountryIso(6), 'ID');
+  assert.equal(resolveCountryIso(16), 'GB');
   assert.equal(resolveCountryIso(41), 'CM');
   assert.equal(resolveCountryIso(0), '');
   assert.equal(resolveCountryIso(null), '');
 });
 
-test('stripDialPrefix drops prefixes for TH, ID, and CM', () => {
+test('stripDialPrefix drops prefixes for TH, ID, UK, and CM', () => {
   assert.equal(stripDialPrefix('66812345678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('+66 812-345-678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('628123456789', { country: 6 }), '8123456789');
+  assert.equal(stripDialPrefix('447123456789', { country: 16 }), '7123456789');
   assert.equal(stripDialPrefix('237658956620', { country: 41 }), '658956620');
   assert.equal(stripDialPrefix('812345678', { country: 52 }), '812345678');
   assert.equal(stripDialPrefix('1234567890', { country: 0 }), '1234567890');

@@ -7,7 +7,7 @@
   root.HeroSmsUtils = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createHeroSmsUtils() {
   const HERO_SMS_BASE_URL = 'https://hero-sms.com/stubs/handler_api.php';
-  const HERO_SMS_DEFAULT_COUNTRY = 41;
+  const HERO_SMS_DEFAULT_COUNTRY = 16;
   const HERO_SMS_DEFAULT_SERVICE = 'dr';
   const HERO_SMS_DEFAULT_POLL_INTERVAL_MS = 5000;
   const HERO_SMS_DEFAULT_POLL_TIMEOUT_MS = 180000;
@@ -176,6 +176,7 @@
     let dial = '';
     if (country === 52) dial = '66';
     if (country === 6) dial = '62';
+    if (country === 16) dial = '44';
     if (country === 41) dial = '237';
     if (dial && digits.startsWith(dial)) {
       return digits.slice(dial.length);
@@ -186,6 +187,7 @@
   const COUNTRY_ID_TO_ISO = Object.freeze({
     52: 'TH',
     6: 'ID',
+    16: 'GB',
     41: 'CM',
   });
 
